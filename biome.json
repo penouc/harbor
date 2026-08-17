@@ -15,7 +15,8 @@
       "!agent-cli/dist",
       "!ios",
       "!android",
-      "!**/*.min.js"
+      "!**/*.min.js",
+      "!**/worker-configuration.d.ts"
     ]
   },
   "formatter": {
