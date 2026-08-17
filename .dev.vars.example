@@ -1,0 +1,9 @@
+# Local wrangler dev only. Copy to `.dev.vars` (gitignored) and fill in.
+# Production: `npx wrangler secret put <NAME>` — never commit values.
+# See docs/CLOUDFLARE.md.
+
+DATABASE_URL=
+REDIS_URL=
+OPENAI_API_KEY=
+AGENT_RUNTIME_SECRET=
+# CUMORA_PUBLIC_ORIGIN=https://harbor.example.workers.dev

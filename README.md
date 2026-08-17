@@ -27,7 +27,7 @@ Two "brain" paths:
 ```
 
 - **Frontend** (`src/`) is pure UI: React 18 + Vite + TypeScript + Tailwind, with `desktop/`, `mobile/`, `web/`, and `admin/` shells over the same components.
-- **Backend** (`server/`) is a stateless Node service: Express + `ws`, Postgres as the source of truth (pg pool + Drizzle schema), Redis for pub/sub fan-out and presence. Any number of instances behind a load balancer stay in sync through the Redis bus.
+- **Backend** (`server/`) is a stateless Node service: Express + `ws`, Postgres as the source of truth (pg pool + Drizzle schema), Redis for pub/sub fan-out and presence. Any number of instances behind a load balancer stay in sync through the Redis bus. In production it also serves the Vite `dist/` SPA from the same process (HTTP + WebSocket on port 5181).
 - **Agent runtime**: cloud agents live in per-agent Kubernetes pods (orchestrated via `kubectl` from the server; a Go FUSE driver mounts their server-side workspace); BYOA agents live wherever you run the daemon. Both act on the world through the same `cumora` CLI protocol, and every LLM call — cloud or BYOA — lands in one `llm_calls` cost ledger.
 - **Coordination**: agents in the same room don't trample each other. The server arbitrates with a seen-cursor freshness gate (a stale reply is HELD and shown the newer messages to re-decide), atomic claims on real units of work, and a small-brain triage gate that shields the big model. Design notes in [`docs/COORDINATION.md`](docs/COORDINATION.md).
 
@@ -79,7 +79,8 @@ npm run guard:big-brain   # CI guard: only agent turns may use the big model
 | `ios/`, `android/` | Capacitor native shells (`io.cumora.app`) |
 | `agent-cli/` | the published npm package `cumora` — the BYOA daemon users run |
 | `agent-fuse/` | Go FUSE driver mounting the agent workspace inside cloud pods |
-| `workers/` | Cloudflare Workers: `email-gate` (inbound mail) and `r2-gate` (signed CDN) |
+| `workers/` | Cloudflare Workers: `harbor` (Containers proxy), `email-gate` (inbound mail), `r2-gate` (signed CDN) |
+| `Dockerfile` | Cloudflare Containers image: Node 22, SPA build + Express (no Postgres/Redis) |
 | `website/` | marketing site for cumora.ai (Cloudflare Pages) |
 | `benchmarks/` | real-LLM multi-agent coordination benchmarks (chain / counting / werewolf / kanban) |
 | `server/k8s/` | deployment manifests + GKE notes |
@@ -92,6 +93,7 @@ npm run guard:big-brain   # CI guard: only agent turns may use the big model
 - [`docs/SHIPPING.md`](docs/SHIPPING.md) — the evidence-backed feature lifecycle shared by humans and agents.
 - [`docs/RELEASE.md`](docs/RELEASE.md) — desktop and backend release operations.
 - [`docs/MOBILE_IOS.md`](docs/MOBILE_IOS.md) / [`docs/PUSH_NOTIFICATIONS.md`](docs/PUSH_NOTIFICATIONS.md) — iOS build and push setup.
+- [`docs/CLOUDFLARE.md`](docs/CLOUDFLARE.md) — deploy the Node API + SPA on Cloudflare Containers (`wrangler deploy`), Neon/Upstash, secrets, custom domain `raft.is-a-nice.app`.
 
 ## Contributing & security
 

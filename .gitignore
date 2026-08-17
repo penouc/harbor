@@ -26,6 +26,9 @@ dist-ssr
 
 # Wrangler local cache (workers/*/.wrangler/) — build artifacts + auth state
 .wrangler/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
 
 # Tauri / Capacitor
 src-tauri/target

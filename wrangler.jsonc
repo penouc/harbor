@@ -1,0 +1,76 @@
+/**
+ * Harbor — Cloudflare Containers Worker.
+ *
+ * The Worker is a thin HTTP/WebSocket proxy. The Express app (+ built
+ * Vite SPA) runs inside the container image built from ./Dockerfile.
+ * See docs/CLOUDFLARE.md for secrets, Neon/Upstash, BYOA, and how to
+ * attach raft.is-a-nice.app later.
+ *
+ * Docs: https://developers.cloudflare.com/containers/
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "harbor",
+	"main": "workers/harbor/src/index.ts",
+	"compatibility_date": "2026-08-17",
+	"workers_dev": true,
+	"observability": {
+		"enabled": true,
+	},
+	"containers": [
+		{
+			"class_name": "HarborContainer",
+			"image": "./Dockerfile",
+			// `basic` = 1/4 vCPU, 1 GiB RAM, 4 GB disk.
+			// Chosen over `standard-1` (4 GiB): this image is a single Node
+			// Express + ws process with Postgres/Redis *outside* the container.
+			// GKE prod requests 512 MiB (limit 2 GiB) *including* kubectl and
+			// agent-pod orchestration, which Cloudflare does not run. `lite`
+			// (256 MiB) is too tight for Node + a 20-client pg pool. Bump to
+			// `standard-1` if RSS approaches 1 GiB (large WS fan-out / JSON).
+			"instance_type": "basic",
+			// One Express process. Redis pub/sub is still required (the server
+			// uses it in-process even with a single replica).
+			"max_instances": 1,
+		},
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "HARBOR",
+				"class_name": "HarborContainer",
+			},
+		],
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["HarborContainer"],
+		},
+	],
+	// Names only — values are set with `npx wrangler secret put <NAME>`
+	// (interactive; do not commit values). Optional secrets (OAuth, R2,
+	// Resend, …) are listed in docs/CLOUDFLARE.md and can be put the same
+	// way; they are forwarded into the container when present.
+	"secrets": {
+		"required": [
+			"DATABASE_URL",
+			"REDIS_URL",
+			"OPENAI_API_KEY",
+			"AGENT_RUNTIME_SECRET",
+		],
+	},
+	// Non-secret public origin. After the first workers.dev URL exists
+	// (or after attaching raft.is-a-nice.app), set this and redeploy so
+	// OAuth redirect_uri / invite links match the public hostname.
+	// "vars": {
+	//   "CUMORA_PUBLIC_ORIGIN": "https://harbor.<YOUR_SUBDOMAIN>.workers.dev"
+	// }
+	//
+	// Custom domain (later). Requires the hostname's zone to already sit
+	// on this Cloudflare account. Do not invent a zone_id. Dashboard
+	// path is documented in docs/CLOUDFLARE.md.
+	// "routes": [
+	//   { "pattern": "raft.is-a-nice.app", "custom_domain": true }
+	// ]
+}

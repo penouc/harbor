@@ -1,0 +1,19 @@
+# Cloudflare Containers image context (repo-root Dockerfile).
+# Allowlist: server + SPA sources only. Postgres/Redis are external.
+*
+!package.json
+!package-lock.json
+!server/**
+!bin/**
+!src/**
+!public/**
+!index.html
+!vite.config.ts
+!tsconfig.json
+!tsconfig.node.json
+!postcss.config.js
+!tailwind.config.ts
+server/**/*.log
+server/**/dist
+dist
+node_modules
