@@ -36,6 +36,15 @@ export const env = {
   REDIS_URL: required('REDIS_URL', 'redis://localhost:6379'),
   OPENAI_API_KEY: required('OPENAI_API_KEY'),
   /**
+   * OpenAI-compatible API base URL for the Responses API client.
+   * Empty = SDK default (`https://api.openai.com/v1`). Set this to
+   * point Harbor at any OpenAI-compatible host (DeepSeek, Azure, a
+   * local proxy, …). When set, `OPENAI_API_KEY` is that provider's
+   * key — the env name stays `OPENAI_API_KEY`. Does not apply to the
+   * sub2api path, which has its own base URL.
+   */
+  OPENAI_BASE_URL: process.env.OPENAI_BASE_URL ?? '',
+  /**
    * "Brain" model — the agent's main reasoning loop and convene speech.
    * Default model used when an agent's `participants.model` is NULL.
    * Per-agent overrides live on the agent row in DB and are edited from

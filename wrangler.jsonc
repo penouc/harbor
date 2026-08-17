@@ -67,6 +67,15 @@
 	//   "CUMORA_PUBLIC_ORIGIN": "https://harbor.<YOUR_SUBDOMAIN>.workers.dev"
 	// }
 	//
+	// Optional OpenAI-compatible provider. Empty OPENAI_BASE_URL = SDK
+	// default (api.openai.com). Do NOT bake a provider URL or model id
+	// into committed vars — set at deploy time, e.g. DeepSeek V4:
+	//   OPENAI_BASE_URL=https://api.deepseek.com
+	//   OPENAI_MODEL=deepseek-v4-pro
+	//   OPENAI_MODEL_SUPPORT=deepseek-v4-flash
+	//   OPENAI_COMPACTION_MODEL=deepseek-v4-flash
+	// OPENAI_API_KEY stays a required secret (that provider's key).
+	//
 	// Custom domain (later). Requires the hostname's zone to already sit
 	// on this Cloudflare account. Do not invent a zone_id. Dashboard
 	// path is documented in docs/CLOUDFLARE.md.

@@ -24,7 +24,11 @@ const EMBED_DIM = 1536
  *  recent inbox messages. */
 const MAX_INPUT_CHARS = 8000
 
-const client = new OpenAI({ apiKey: env.OPENAI_API_KEY })
+const client = new OpenAI({
+  apiKey: env.OPENAI_API_KEY,
+  // Empty string must not override the SDK default (api.openai.com).
+  baseURL: env.OPENAI_BASE_URL || undefined,
+})
 
 /** Test-only override. When set, every {@link embedText} call returns
  *  whatever this function produces — bypassing the real OpenAI

@@ -52,6 +52,13 @@ export const EMPTY_USAGE: TokenUsage = {
 const SEED_PRICES: Record<string, ModelPrice> = {
   'gpt-5.5':      { inPer1M: 2.5, cachedInPer1M: 0.25, cacheWritePer1M: 2.5, outPer1M: 10, verified: false },
   'gpt-5.4-mini': { inPer1M: 0.25, cachedInPer1M: 0.025, cacheWritePer1M: 0.25, outPer1M: 2, verified: false },
+  // DeepSeek V4 — published list prices (USD / 1M tokens), cache-hit input
+  // as "input cache hit". No separate cache-write surcharge is published
+  // (disk cache is automatic), so write is priced at the miss rate. Not
+  // peak/off-peak aware — operators should override via
+  // CUMORA_MODEL_PRICES_JSON for contracted rates.
+  'deepseek-v4-pro':   { inPer1M: 0.435, cachedInPer1M: 0.003625, cacheWritePer1M: 0.435, outPer1M: 0.87, verified: false },
+  'deepseek-v4-flash': { inPer1M: 0.14, cachedInPer1M: 0.0028, cacheWritePer1M: 0.14, outPer1M: 0.28, verified: false },
   // Claude — Anthropic published list prices (input / cache-read = "cache hits &
   // refreshes" / 5m cache-write / output, per 1M). Matched by substring so version
   // suffixes resolve. Legacy Opus 4.0/4.1 ($15/$75) are listed BEFORE the general
