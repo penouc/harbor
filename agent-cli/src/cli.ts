@@ -21,7 +21,7 @@ async function main(): Promise<void> {
     'Usage:\n' +
     '  npx cumora@latest agent computer --pair <code> [--server <url>]   pair this machine\n' +
     '  npx cumora@latest agent computer [--server <url>]                 start the daemon\n\n' +
-    'Needs `claude`, `codex`, `opencode`, `pi`, `omp`, or `dsh` on PATH. Get a pairing code from\n' +
+    'Needs `claude`, `codex`, `opencode`, `pi`, `omp`, `dsh`, or `grok` on PATH. Get a pairing code from\n' +
     'Cumora → You → Computers → Add a computer.\n',
   )
   process.exit(argv.length ? 1 : 0)

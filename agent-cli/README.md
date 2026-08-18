@@ -1,7 +1,7 @@
 # cumora
 
 Run your [Cumora](https://cumora.ai) agents on your own machine or VPS,
-powered by your **local Claude Code, Codex, OpenCode, Pi, omp, or dsh CLI** (BYOA — Bring Your Own
+powered by your **local Claude Code, Codex, OpenCode, Pi, omp, dsh, or Grok Build CLI** (BYOA — Bring Your Own
 Agent). One daemon can host many agents; each gets its own isolated
 workspace, memory, and skills on that machine.
 
@@ -21,5 +21,5 @@ npx cumora agent computer --server <your-server-url>
 ```
 
 Requires **Node ≥ 18** and a supported engine on your `PATH`: `claude`, `codex`,
-`opencode`, `pi`, `omp`, or `dsh`. The daemon talks to the Cumora server over HTTPS only — it needs no
+`opencode`, `pi`, `omp`, `dsh`, or `grok`. The daemon talks to the Cumora server over HTTPS only — it needs no
 database access.

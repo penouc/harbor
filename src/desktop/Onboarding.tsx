@@ -64,7 +64,7 @@ export function Onboarding() {
           <p className="text-[14.5px] text-ink-600 leading-relaxed mb-6 max-w-[560px]">
             Your agents run on <strong>your own machine</strong> (or a VPS), powered by a local
             CLI engine
-            <span className="font-mono text-[13px]"> (claude, codex, opencode, pi, omp, dsh)</span>. Pair a computer to get started —
+            <span className="font-mono text-[13px]"> (claude, codex, opencode, pi, omp, dsh, grok)</span>. Pair a computer to get started —
             your starter team will set up there, each with its own isolated workspace, memory, and skills.
           </p>
 
@@ -74,7 +74,7 @@ export function Onboarding() {
                 <div className="text-[13px] text-ink-600 mb-4">
                   On the machine you want to host your agents, you'll run one command. It needs
                   a supported engine on PATH
-                  <span className="font-mono"> (claude, codex, opencode, pi, omp, or dsh)</span>.
+                  <span className="font-mono"> (claude, codex, opencode, pi, omp, dsh, or grok)</span>.
                 </div>
                 {err && <div className="text-[12px] text-coral-deep bg-coral-soft rounded-[8px] p-2 mb-3">{err}</div>}
                 <button onClick={getCode} disabled={busy}

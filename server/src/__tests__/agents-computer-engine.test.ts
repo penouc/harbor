@@ -90,13 +90,14 @@ test('persistent Claude startup failure keeps stderr for first send', async () =
   assert.match(logs[1] ?? '', /\[session\] engine process died .*exit 1/)
 })
 
-test('ENGINE_IDS lists claude, codex, then opencode, pi, omp, dsh', async () => {
+test('ENGINE_IDS lists claude, codex, then opencode, pi, omp, dsh, grok', async () => {
   const { ENGINE_IDS, getAdapter } = await import('../agents/computer/engine.js')
-  assert.deepEqual(ENGINE_IDS, ['claude', 'codex', 'opencode', 'pi', 'omp', 'dsh'])
+  assert.deepEqual(ENGINE_IDS, ['claude', 'codex', 'opencode', 'pi', 'omp', 'dsh', 'grok'])
   assert.equal(getAdapter('opencode').bin, 'opencode')
   assert.equal(getAdapter('pi').bin, 'pi')
   assert.equal(getAdapter('omp').bin, 'omp')
   assert.equal(getAdapter('dsh').bin, 'dsh')
+  assert.equal(getAdapter('grok').bin, 'grok')
 })
 
 test('new engines seed AGENTS.md without clobbering memory', async () => {
@@ -113,24 +114,28 @@ test('new engines seed AGENTS.md without clobbering memory', async () => {
   await writeFile(join(home, 'memory', 'MEMORY.md'), memory + '\nkept\n', 'utf8')
   await writeFile(join(home, 'AGENTS.md'), 'do not clobber\n', 'utf8')
   await getAdapter('pi').seedHome(home, persona)
+  await getAdapter('grok').seedHome(home, persona)
   assert.equal(await readFile(join(home, 'AGENTS.md'), 'utf8'), 'do not clobber\n')
   assert.match(await readFile(join(home, 'memory', 'MEMORY.md'), 'utf8'), /kept/)
 })
 
-test('dsh has no persistent session; custom args disable OpenCode/Pi sessions', () => {
+test('dsh has no persistent session; custom args disable OpenCode/Pi/Grok sessions', () => {
   const home = tmpdir()
   const opts = { home, env: process.env, onLog: () => {} }
   assert.equal(getAdapter('dsh').startSession?.(opts) ?? null, null)
   const prevOpen = process.env.CUMORA_OPENCODE_ARGS
   const prevPi = process.env.CUMORA_PI_ARGS
   const prevOmp = process.env.CUMORA_OMP_ARGS
+  const prevGrok = process.env.CUMORA_GROK_ARGS
   process.env.CUMORA_OPENCODE_ARGS = '--auto'
   process.env.CUMORA_PI_ARGS = '-p'
   process.env.CUMORA_OMP_ARGS = '-p'
+  process.env.CUMORA_GROK_ARGS = '-p'
   try {
     assert.equal(getAdapter('opencode').startSession?.(opts) ?? null, null)
     assert.equal(getAdapter('pi').startSession?.(opts) ?? null, null)
     assert.equal(getAdapter('omp').startSession?.(opts) ?? null, null)
+    assert.equal(getAdapter('grok').startSession?.(opts) ?? null, null)
   } finally {
     if (prevOpen === undefined) delete process.env.CUMORA_OPENCODE_ARGS
     else process.env.CUMORA_OPENCODE_ARGS = prevOpen
@@ -138,6 +143,8 @@ test('dsh has no persistent session; custom args disable OpenCode/Pi sessions', 
     else process.env.CUMORA_PI_ARGS = prevPi
     if (prevOmp === undefined) delete process.env.CUMORA_OMP_ARGS
     else process.env.CUMORA_OMP_ARGS = prevOmp
+    if (prevGrok === undefined) delete process.env.CUMORA_GROK_ARGS
+    else process.env.CUMORA_GROK_ARGS = prevGrok
   }
 })
 
@@ -190,5 +197,68 @@ test('byoaSource is byoa-<engine id> for ledger/triage hops', async () => {
   assert.equal(byoaSource('pi'), 'byoa-pi')
   assert.equal(byoaSource('omp'), 'byoa-omp')
   assert.equal(byoaSource('dsh'), 'byoa-dsh')
+  assert.equal(byoaSource('grok'), 'byoa-grok')
   for (const id of ENGINE_IDS) assert.equal(byoaSource(id), `byoa-${id}`)
+})
+
+test('Grok ACP session authenticates headless then completes session/prompt', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'cumora-engine-grok-'))
+  tempDirs.push(root)
+  const binDir = join(root, 'bin')
+  const home = join(root, 'home')
+  await mkdir(binDir)
+  await mkdir(home)
+  const fakeGrok = join(binDir, 'grok')
+  await writeFile(
+    fakeGrok,
+    '#!/usr/bin/env node\n' +
+    'const rl = require("readline").createInterface({ input: process.stdin })\n' +
+    'const reply = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n")\n' +
+    'rl.on("line", (line) => {\n' +
+    '  let msg; try { msg = JSON.parse(line) } catch { return }\n' +
+    '  if (msg.method === "initialize") {\n' +
+    '    reply({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1, authMethods: [{ id: "cached_token" }, { id: "xai.api_key" }] } })\n' +
+    '    return\n' +
+    '  }\n' +
+    '  if (msg.method === "authenticate") {\n' +
+    '    if (!msg.params || !msg.params._meta || msg.params._meta.headless !== true) {\n' +
+    '      reply({ jsonrpc: "2.0", id: msg.id, error: { message: "browser auth not allowed" } })\n' +
+    '      return\n' +
+    '    }\n' +
+    '    if (msg.params.methodId !== "cached_token" && msg.params.methodId !== "xai.api_key") {\n' +
+    '      reply({ jsonrpc: "2.0", id: msg.id, error: { message: "unknown auth method" } })\n' +
+    '      return\n' +
+    '    }\n' +
+    '    reply({ jsonrpc: "2.0", id: msg.id, result: {} })\n' +
+    '    return\n' +
+    '  }\n' +
+    '  if (msg.method === "session/new" || msg.method === "session/load") {\n' +
+    '    reply({ jsonrpc: "2.0", id: msg.id, result: { sessionId: "grok-sess-1" } })\n' +
+    '    return\n' +
+    '  }\n' +
+    '  if (msg.method === "session/prompt") {\n' +
+    '    reply({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hi from grok" } } } })\n' +
+    '    reply({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn" } })\n' +
+    '  }\n' +
+    '})\n',
+    'utf8',
+  )
+  await chmod(fakeGrok, 0o755)
+
+  const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}` }
+  delete env.XAI_API_KEY
+  const logs: string[] = []
+  const session = getAdapter('grok').startSession?.({
+    home,
+    env,
+    model: null,
+    fastModel: null,
+    onLog: (line) => logs.push(line),
+  })
+  assert.ok(session)
+  const result = await session.send('wake')
+  assert.equal(result.exitCode, 0)
+  assert.equal(result.sessionId, 'grok-sess-1')
+  assert.ok(logs.some((l) => /hi from grok/.test(l)))
+  session.stop()
 })

@@ -709,7 +709,7 @@ function ComputersTab() {
   const [copied, setCopied] = useState(false)
   // Engine for a NEWLY added computer's starter/assigned agents. Claude is the
   // default (no `--engine` flag → daemon auto-detects); other engines append
-  // `--engine <id>` (codex / opencode / pi / omp / dsh).
+  // `--engine <id>` (codex / opencode / pi / omp / dsh / grok).
   const [engine, setEngine] = useState<PairableEngineId>('claude')
   // Default on: install the always-on service (auto-start/restart/update).
   // --install-service is macOS/Linux only (daemon throws on Windows) → off + hidden there.
@@ -775,7 +775,7 @@ function ComputersTab() {
         <p className="text-[13px] text-ink-500 mb-4 max-w-[640px]">
           Every agent runs on a <strong>Computer</strong>. <em>Cumora Cloud</em> is built in and
           always on. Pair your own machine or a VPS to run agents on a local CLI engine
-          <span className="font-mono text-[12px]"> (claude, codex, opencode, pi, omp, dsh)</span> — each agent gets its own isolated
+          <span className="font-mono text-[12px]"> (claude, codex, opencode, pi, omp, dsh, grok)</span> — each agent gets its own isolated
           workspace, memory and skills there.
         </p>
 
@@ -857,7 +857,7 @@ function ComputersTab() {
             </div>
             <div className="text-[11.5px] text-ink-500 mb-2.5 italic font-display">
               Needs a supported engine on PATH
-              <span className="font-mono not-italic"> (claude, codex, opencode, pi, omp, or dsh)</span>. The computer names itself after that machine and appears here once paired. This token stays valid.
+              <span className="font-mono not-italic"> (claude, codex, opencode, pi, omp, dsh, or grok)</span>. The computer names itself after that machine and appears here once paired. This token stays valid.
             </div>
             <div className="flex items-center gap-2.5 mb-2.5">
               <span className="text-[12px] text-ink-500">Engine</span>

@@ -52,6 +52,7 @@ test('R4 — spawning a local engine binary outside the engine adapter is caught
   assert.ok(lineViolations('server/src/agents/tools.ts', `spawn('claude', args)`).length > 0)
   assert.ok(lineViolations('server/src/agents/tools.ts', `execFile('codex', args)`).length > 0)
   assert.ok(lineViolations('server/src/agents/tools.ts', `spawn('opencode', args)`).length > 0)
+  assert.ok(lineViolations('server/src/agents/tools.ts', `spawn('grok', args)`).length > 0)
   assert.deepEqual(lineViolations('server/src/agents/computer/engine.ts', `spawn('claude', args)`), [])
   assert.deepEqual(lineViolations('server/src/agents/computer/engine.ts', `spawn('pi', args)`), [])
 })

@@ -3,7 +3,7 @@
  *
  * A long-running process on the user's machine (laptop or VPS) that hosts one
  * or more of their Cumora agents, using a local engine (Claude Code, Codex,
- * OpenCode, Pi, omp, or dsh) as each agent's brain. See docs/BYOA.md.
+ * OpenCode, Pi, omp, dsh, or Grok Build) as each agent's brain. See docs/BYOA.md.
  *
  * It talks to the Cumora server only over HTTP — no DB/Redis — so it can run
  * anywhere:
@@ -460,6 +460,9 @@ function authFailureHint(engine: EngineId, detail: string): string {
   if (engine === 'dsh') {
     return 'Set DEEPSEEK_API_KEY (or complete dsh auth) on that computer, then wake the agent again.'
   }
+  if (engine === 'grok') {
+    return 'Sign in with `grok login` (or `grok login --device-auth` on a headless host) or set XAI_API_KEY. SuperGrok / X Premium Plus is required for subscription login, then wake the agent again.'
+  }
   return `Check ${engine} auth/quota on that computer, then wake the agent again.`
 }
 
@@ -474,6 +477,7 @@ function missingEngineMessage(): string {
     '  - Pi: `pi`',
     '  - omp (oh-my-pi): `omp`',
     '  - dsh (DeepSeek Harness): `dsh`',
+    '  - Grok Build: `grok`',
     '',
     'After that, rerun:',
     '  npx cumora@latest agent computer --pair <code>',
@@ -485,7 +489,7 @@ function helpText(): string {
     'cumora agent computer — run your Cumora agents on THIS machine (BYOA)',
     '',
     'The daemon talks to a Cumora server over HTTP and drives a local agent',
-    'engine (Claude Code, Codex, OpenCode, Pi, omp, or dsh). Pair once, then it runs in the background.',
+    'engine (Claude Code, Codex, OpenCode, Pi, omp, dsh, or Grok Build). Pair once, then it runs in the background.',
     '',
     'Usage:',
     '  npx cumora@latest agent computer --pair <code> [--server <url>] [--engine <id>]',

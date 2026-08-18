@@ -2,7 +2,7 @@
  * EngineAdapter — the pluggable "brain" for a BYOA agent.
  *
  * A BYOA agent's reasoning loop is delegated to a local CLI engine running
- * on the user's machine: Claude Code, Codex, OpenCode, Pi, omp, or dsh. The daemon (daemon.ts) hands
+ * on the user's machine: Claude Code, Codex, OpenCode, Pi, omp, dsh, or Grok Build. The daemon (daemon.ts) hands
  * each wake to an adapter, which spawns the engine headlessly in the agent's
  * isolated home directory. The engine reads its persona + memory + skills
  * from that home natively (CLAUDE.md / AGENTS.md, .claude/skills, …) and acts
@@ -15,7 +15,7 @@
  * across engine versions. We pick sensible defaults for an isolated,
  * user-owned runner and let the user override via env
  * (CUMORA_CLAUDE_ARGS / CUMORA_CODEX_ARGS / CUMORA_OPENCODE_ARGS /
- * CUMORA_PI_ARGS / CUMORA_OMP_ARGS / CUMORA_DSH_ARGS, space-split). Correctness of the
+ * CUMORA_PI_ARGS / CUMORA_OMP_ARGS / CUMORA_DSH_ARGS / CUMORA_GROK_ARGS, space-split). Correctness of the
  * loop does not depend on the structured output — the agent acts via the
  * `cumora` tool regardless of how we parse stdout.
  */
@@ -44,7 +44,7 @@ const CODEX_LOG_RAW = process.env.CUMORA_CODEX_VERBOSE === '1'
 
 /** How to spawn a CLI bin cross-platform.
  *  - POSIX: spawn the bare bin with shell:false — unchanged, zero-risk.
- *  - Windows: engine bins (`claude`/`codex`/`opencode`/`pi`/`omp`/`dsh`) are often `.cmd` shims that Node CANNOT run with
+ *  - Windows: engine bins (`claude`/`codex`/`opencode`/`pi`/`omp`/`dsh`/`grok`) are often `.cmd` shims that Node CANNOT run with
  *    shell:false (CreateProcess can't execute a batch file) → "process exited with
  *    code 1". Resolve the real file on PATH and run a `.cmd`/`.bat` via
  *    shell:true. When the shell is needed,
@@ -67,7 +67,7 @@ function resolveSpawn(bin: string): { command: string; shell: boolean; wantsStdi
   return { command: bin, shell: true, wantsStdinPrompt: true }
 }
 
-export type EngineId = 'claude' | 'codex' | 'opencode' | 'pi' | 'omp' | 'dsh'
+export type EngineId = 'claude' | 'codex' | 'opencode' | 'pi' | 'omp' | 'dsh' | 'grok'
 
 /** Ledger / triage source for a local engine hop (`byoa-claude`, `byoa-opencode`, …). */
 export type ByoaSource = `byoa-${EngineId}`
@@ -77,7 +77,7 @@ export function byoaSource(id: EngineId): ByoaSource {
 }
 
 /** The pairable engine ids, in the daemon's default detection order. */
-export const ENGINE_IDS: EngineId[] = ['claude', 'codex', 'opencode', 'pi', 'omp', 'dsh']
+export const ENGINE_IDS: EngineId[] = ['claude', 'codex', 'opencode', 'pi', 'omp', 'dsh', 'grok']
 
 export interface EnginePersona {
   id: string
@@ -467,16 +467,17 @@ function spawnEngine(
         // Sniff the engine's session id (to `--resume` next wake), the final
         // `result` event's usage (cache-aware cost), and the actual model id
         // (real pricing). Cheap: only parse stdout JSON objects carrying one.
-        if (stream === 'stdout' && cleaned.startsWith('{') && (cleaned.includes('"session_id"') || cleaned.includes('"usage"') || cleaned.includes('"model"'))) {
+        if (stream === 'stdout' && cleaned.startsWith('{') && (cleaned.includes('"session_id"') || cleaned.includes('"sessionId"') || cleaned.includes('"usage"') || cleaned.includes('"model"'))) {
           try {
             const obj = JSON.parse(cleaned) as {
-              session_id?: unknown; sessionID?: unknown; id?: unknown
+              session_id?: unknown; sessionID?: unknown; sessionId?: unknown; id?: unknown
               type?: unknown; usage?: unknown; model?: unknown; tokens?: unknown
               part?: { text?: unknown; tokens?: unknown; model?: unknown }
               message?: { model?: unknown; usage?: unknown; content?: unknown; role?: unknown }
             }
             if (typeof obj.session_id === 'string' && obj.session_id) sessionId = obj.session_id
             if (typeof obj.sessionID === 'string' && obj.sessionID) sessionId = obj.sessionID
+            if (typeof obj.sessionId === 'string' && obj.sessionId) sessionId = obj.sessionId
             if (obj.type === 'session' && typeof obj.id === 'string' && obj.id) sessionId = obj.id
             // The terminal `result` event carries the authoritative turn total.
             if (obj.type === 'result' && obj.usage && typeof obj.usage === 'object') usage = obj.usage as EngineUsage
@@ -1519,6 +1520,32 @@ function unwrapPiAssistantText(raw: string): { text: string; usage?: EngineUsage
   return { text: text.trim(), usage, model }
 }
 
+/** Pull assistant text out of Grok `--output-format json` (one object with `.text`). */
+function unwrapGrokText(raw: string): { text: string; usage?: EngineUsage; model?: string | null } {
+  const tryParse = (s: string): Record<string, unknown> | null => {
+    try {
+      const v = JSON.parse(s) as unknown
+      return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null
+    } catch { return null }
+  }
+  let obj = tryParse(raw.trim())
+  if (!obj) {
+    for (const line of raw.split('\n').reverse()) {
+      const t = line.trim()
+      if (!t.startsWith('{')) continue
+      obj = tryParse(t)
+      if (obj) break
+    }
+  }
+  if (!obj) return { text: '' }
+  const text = typeof obj.text === 'string' ? obj.text : ''
+  const model = typeof obj.model === 'string' ? obj.model : null
+  const usage = usageFromPiShape(obj.usage)
+  return { text: text.trim(), usage, model }
+}
+
+const GROK_AUTH_HINT = 'Run `grok login` (or `grok login --device-auth` on a headless host) or set XAI_API_KEY. SuperGrok / X Premium Plus is required for subscription login. The daemon will not open a browser.'
+
 function classifyFromJsonl(res: EngineClassifyResult, unwrap: (raw: string) => { text: string; usage?: EngineUsage }): EngineClassifyResult {
   if (res.error) return res
   const parsed = unwrap(res.text)
@@ -1538,6 +1565,7 @@ type AcpRpcMsg = {
     sessionId?: unknown
     stopReason?: unknown
     protocolVersion?: unknown
+    authMethods?: Array<{ id?: unknown }>
   }
   error?: { message?: unknown; code?: unknown }
   params?: {
@@ -2211,6 +2239,388 @@ class DshAdapter implements EngineAdapter {
   }
 }
 
+/**
+ * Persistent Grok Build session over ACP (`grok --no-auto-update agent stdio`).
+ * JSON-RPC 2.0 nd-JSON: initialize (fs + terminal) → authenticate (xai.api_key
+ * if XAI_API_KEY is set, else cached_token, always `_meta.headless`) →
+ * session/new|load → session/prompt. Tool permissions are auto-allowed.
+ * ACP has no mid-turn steer; queued steer is the next session/prompt.
+ * Never opens a browser from the daemon.
+ */
+class GrokAcpSession implements EngineSession {
+  private readonly child: ChildProcess
+  private readonly onLog: (line: string) => void
+  private readonly home: string
+  private readonly env: NodeJS.ProcessEnv
+  private outBuf = ''
+  private sid: string | null
+  private exited = false
+  private exitCode = 0
+  private reqId = 0
+  private initializeId: number | null = null
+  private authId: number | null = null
+  private sessionReqId: number | null = null
+  private promptId: number | null = null
+  private loadingResume = false
+  private ready = false
+  private pending: { resolve: (r: EngineRunResult) => void } | null = null
+  private queuedPrompt: string | null = null
+  private steerQueue: string[] = []
+  private readonly model: string | null
+  readonly carriesStandingPrompt = false
+
+  constructor(bin: string, spawnArgs: string[], home: string, env: NodeJS.ProcessEnv, opts: EngineSessionArgs) {
+    this.onLog = opts.onLog
+    this.home = home
+    this.env = env
+    this.sid = opts.resumeSessionId ?? null
+    this.model = opts.model ?? null
+    const { command, shell } = resolveSpawn(bin)
+    this.child = spawn(command, spawnArgs, { cwd: home, env, stdio: ['pipe', 'pipe', 'pipe'], shell })
+    this.child.stdout?.on('data', (b: Buffer) => this.onStdout(b))
+    this.child.stderr?.on('data', (b: Buffer) => { for (const raw of b.toString('utf8').split('\n')) { const l = cleanLine(raw); if (l) this.onLog(l) } })
+    this.child.on('error', (err) => this.die(1, err.message))
+    this.child.on('close', (code, sig) => this.die(code ?? (sig ? 128 : 1), sig ? `terminated by ${sig}` : `exited with code ${code}`))
+    queueMicrotask(() => {
+      this.initializeId = this.req('initialize', {
+        protocolVersion: 1,
+        clientInfo: { name: 'cumora-daemon', version: '1.0.0' },
+        clientCapabilities: {
+          fs: { readTextFile: true, writeTextFile: true },
+          terminal: true,
+        },
+      })
+    })
+  }
+
+  get alive(): boolean { return !this.exited && this.child.stdin?.writable === true }
+  get sessionId(): string | null { return this.sid }
+
+  send(prompt: string): Promise<EngineRunResult> {
+    if (this.pending) return Promise.resolve({ exitCode: 1, error: 'engine session busy — a turn is already in flight', sessionId: this.sid })
+    if (!this.alive) return Promise.resolve({ exitCode: this.exitCode || 1, error: 'engine session is not alive (process gone)', sessionId: this.sid })
+    return new Promise<EngineRunResult>((resolve) => {
+      this.pending = { resolve }
+      if (this.ready && this.sid) this.startPrompt(prompt)
+      else this.queuedPrompt = prompt
+    })
+  }
+
+  steer(text: string): void {
+    if (this.pending && this.alive && text.trim()) this.steerQueue.push(text)
+  }
+
+  stop(): void {
+    this.exited = true
+    if (this.sid) this.notify('session/cancel', { sessionId: this.sid })
+    try { this.child.stdin?.end() } catch { /* ignore */ }
+    try { this.child.kill('SIGTERM') } catch { /* ignore */ }
+  }
+
+  private nextId(): number { this.reqId += 1; return this.reqId }
+  private req(method: string, params: Record<string, unknown>): number {
+    const id = this.nextId()
+    try { this.child.stdin?.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n') } catch { /* die() handles */ }
+    return id
+  }
+  private notify(method: string, params: Record<string, unknown>): void {
+    try { this.child.stdin?.write(JSON.stringify({ jsonrpc: '2.0', method, params }) + '\n') } catch { /* die() handles */ }
+  }
+  private reply(id: number, result: unknown): void {
+    try { this.child.stdin?.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n') } catch { /* die() handles */ }
+  }
+  private startPrompt(prompt: string): void {
+    if (!this.sid) return
+    this.promptId = this.req('session/prompt', {
+      sessionId: this.sid,
+      prompt: [{ type: 'text', text: stripLoneSurrogates(prompt) }],
+    })
+  }
+  private openSession(): void {
+    if (this.sid) {
+      this.loadingResume = true
+      this.sessionReqId = this.req('session/load', { sessionId: this.sid, cwd: this.home, mcpServers: [] })
+    } else {
+      this.sessionReqId = this.req('session/new', { cwd: this.home, mcpServers: [] })
+    }
+  }
+  private pickAuthMethod(authMethods: Array<{ id?: unknown }> | undefined): string | null {
+    const ids = new Set((authMethods ?? []).map((m) => m.id).filter((id): id is string => typeof id === 'string'))
+    if (this.env.XAI_API_KEY && ids.has('xai.api_key')) return 'xai.api_key'
+    if (ids.has('cached_token')) return 'cached_token'
+    return null
+  }
+
+  private onStdout(buf: Buffer): void {
+    this.outBuf += buf.toString('utf8')
+    let nl: number
+    while ((nl = this.outBuf.indexOf('\n')) >= 0) {
+      const line = this.outBuf.slice(0, nl)
+      this.outBuf = this.outBuf.slice(nl + 1)
+      const t = line.trim()
+      if (!t.startsWith('{')) { const c = cleanLine(line); if (c) this.onLog(c); continue }
+      let msg: AcpRpcMsg | null = null
+      try { msg = JSON.parse(t) as AcpRpcMsg } catch { msg = null }
+      if (!msg) { const c = cleanLine(line); if (c) this.onLog(c); continue }
+      this.handle(msg)
+    }
+  }
+
+  private handle(msg: AcpRpcMsg): void {
+    if (msg.method === 'session/request_permission' && msg.id !== undefined) {
+      const options = msg.params?.options ?? []
+      const pick = options.find((o) => o.kind === 'allow_always' || o.optionId === 'always' || o.optionId === 'allow_always')
+        ?? options.find((o) => o.kind === 'allow_once' || o.optionId === 'once' || o.optionId === 'allow_once')
+        ?? options[0]
+      const optionId = typeof pick?.optionId === 'string' ? pick.optionId : 'allow_once'
+      this.reply(msg.id, { outcome: { outcome: 'selected', optionId } })
+      return
+    }
+    if (msg.method === 'session/update') {
+      const upd = msg.params?.update as { sessionUpdate?: unknown; content?: { type?: unknown; text?: unknown } } | undefined
+      const chunk = upd?.sessionUpdate === 'agent_message_chunk' && typeof upd.content?.text === 'string' ? upd.content.text : ''
+      const text = chunk || (upd?.content?.type === 'text' && typeof upd.content.text === 'string' ? upd.content.text : '')
+      if (text.trim()) this.onLog(`[grok] ${text.replace(/\s+/g, ' ').slice(0, 200)}`)
+      return
+    }
+    if (msg.id !== undefined && msg.id === this.initializeId) {
+      this.initializeId = null
+      if (msg.error) { this.failPending(String(msg.error.message || 'grok acp initialize failed')); return }
+      const methodId = this.pickAuthMethod(msg.result?.authMethods)
+      if (!methodId) { this.failPending(GROK_AUTH_HINT); return }
+      this.authId = this.req('authenticate', { methodId, _meta: { headless: true } })
+      return
+    }
+    if (msg.id !== undefined && msg.id === this.authId) {
+      this.authId = null
+      if (msg.error) { this.failPending(`${GROK_AUTH_HINT} (${String(msg.error.message || 'authenticate failed')})`); return }
+      this.openSession()
+      return
+    }
+    if (msg.id !== undefined && msg.id === this.sessionReqId) {
+      this.sessionReqId = null
+      if (msg.error) {
+        if (this.loadingResume) {
+          this.onLog(`[grok] session/load failed (${String(msg.error.message || '')}) — starting a fresh session`)
+          this.loadingResume = false
+          this.sid = null
+          this.sessionReqId = this.req('session/new', { cwd: this.home, mcpServers: [] })
+          return
+        }
+        this.failPending(String(msg.error.message || 'grok session/new failed'))
+        return
+      }
+      const sid = typeof msg.result?.sessionId === 'string' ? msg.result.sessionId : this.sid
+      if (typeof sid === 'string' && sid) this.sid = sid
+      this.ready = true
+      if (this.queuedPrompt && this.pending) { const p = this.queuedPrompt; this.queuedPrompt = null; this.startPrompt(p) }
+      return
+    }
+    if (msg.id !== undefined && msg.id === this.promptId) {
+      this.promptId = null
+      if (msg.error) { this.settle(String(msg.error.message || 'grok session/prompt failed')); return }
+      const stop = typeof msg.result?.stopReason === 'string' ? msg.result.stopReason : ''
+      const failed = stop === 'refusal' ? 'grok refused the turn' : undefined
+      const next = this.steerQueue.shift()
+      if (next && this.alive && this.pending) { this.startPrompt(next); return }
+      this.settle(failed)
+    }
+  }
+
+  private settle(error?: string): void {
+    const p = this.pending
+    this.pending = null
+    this.steerQueue = []
+    if (p) p.resolve({ exitCode: error ? 1 : 0, error, sessionId: this.sid, model: this.model })
+  }
+  private failPending(error: string): void {
+    if (this.pending) this.settle(error)
+    else this.onLog(`[grok] ${error}`)
+  }
+  private die(code: number, why: string): void {
+    const alreadyDown = this.exited
+    this.exited = true
+    this.exitCode = code
+    if (!alreadyDown) {
+      this.onLog(`[session] engine process died ${this.pending ? 'MID-TURN' : 'while idle'}: ${why} (exit ${code})`)
+    }
+    const p = this.pending
+    this.pending = null
+    if (p) p.resolve({ exitCode: code, error: why, sessionId: this.sid })
+  }
+}
+
+class GrokAdapter implements EngineAdapter {
+  readonly id = 'grok' as const
+  readonly bin = 'grok'
+
+  async classify(args: EngineClassifyArgs): Promise<EngineClassifyResult> {
+    const flags = extraArgs('CUMORA_TRIAGE_ARGS')
+    const { command, shell, wantsStdinPrompt } = resolveSpawn(this.bin)
+    const model = args.model ? ['--model', args.model] : []
+    const base = flags.length ? ['-p', ...flags] : ['-p', ...this.headlessFlags(args.cwd), ...model]
+    const argv = wantsStdinPrompt ? base : this.withPrompt(base, args.prompt)
+    const res = await spawnCapture(command, argv, {
+      cwd: args.cwd, env: args.env, signal: args.signal, onLog: args.onLog, shell,
+      stdinText: wantsStdinPrompt ? args.prompt : undefined,
+    })
+    if (res.error) return res
+    const parsed = unwrapGrokText(res.text)
+    if (parsed.text) return { text: parsed.text, usage: parsed.usage }
+    return { text: res.text, error: `grok classify produced no text: ${(res.text || '').slice(0, 240)}` }
+  }
+
+  probe(args: EngineProbeArgs): Promise<EngineClassifyResult> {
+    const { command, shell, wantsStdinPrompt } = resolveSpawn(this.bin)
+    const base = ['-p', ...this.headlessFlags(args.cwd)]
+    const argv = wantsStdinPrompt ? base : this.withPrompt(base, DOCTOR_PROMPT)
+    return spawnCapture(command, argv, {
+      cwd: args.cwd, env: args.env, signal: args.signal, shell,
+      stdinText: wantsStdinPrompt ? DOCTOR_PROMPT : undefined,
+    }).then((res) => {
+      if (res.error) return res
+      const parsed = unwrapGrokText(res.text)
+      return { text: parsed.text || 'OK', usage: parsed.usage }
+    })
+  }
+
+  async probeWake(args: EngineWakeProbeArgs): Promise<EngineWakeProbeResult> {
+    if (extraArgs('CUMORA_GROK_ARGS').length) return { ok: true, detail: '', skipped: true }
+    const { command, shell } = resolveSpawn(this.bin)
+    return new Promise<EngineWakeProbeResult>((resolve) => {
+      let settled = false
+      const finish = (r: EngineWakeProbeResult) => {
+        if (settled) return
+        settled = true
+        try { child.stdin?.end() } catch { /* ignore */ }
+        try { child.kill('SIGTERM') } catch { /* ignore */ }
+        resolve(r)
+      }
+      const child = spawn(command, ['--no-auto-update', 'agent', 'stdio'], {
+        cwd: args.cwd, env: args.env, stdio: ['pipe', 'pipe', 'pipe'], shell,
+      })
+      const onAbort = () => finish({ ok: false, detail: 'aborted (timeout)' })
+      if (args.signal.aborted) { onAbort(); return }
+      args.signal.addEventListener('abort', onAbort, { once: true })
+      let buf = ''
+      let stderrTail = ''
+      const initId = 1
+      const authId = 2
+      const newSessionId = 3
+      let stage: 'init' | 'auth' | 'session' = 'init'
+      const writeRpc = (msg: object) => {
+        try { child.stdin?.write(JSON.stringify(msg) + '\n') } catch { /* die path handles */ }
+      }
+      writeRpc({
+        jsonrpc: '2.0', id: initId, method: 'initialize',
+        params: {
+          protocolVersion: 1,
+          clientInfo: { name: 'cumora-doctor', version: '1.0.0' },
+          clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: true },
+        },
+      })
+      child.stdout?.on('data', (b: Buffer) => {
+        buf += b.toString('utf8')
+        for (;;) {
+          const nl = buf.indexOf('\n')
+          if (nl < 0) break
+          const line = buf.slice(0, nl).trim()
+          buf = buf.slice(nl + 1)
+          if (!line) continue
+          let msg: AcpRpcMsg
+          try { msg = JSON.parse(line) as AcpRpcMsg } catch { continue }
+          if (msg.method === 'session/request_permission' && msg.id !== undefined) {
+            writeRpc({ jsonrpc: '2.0', id: msg.id, result: { outcome: { outcome: 'selected', optionId: 'allow_once' } } })
+            continue
+          }
+          if (stage === 'init' && msg.id === initId) {
+            if (msg.error?.message) {
+              finish({ ok: false, detail: `acp rejected initialize: ${String(msg.error.message).slice(0, 240)}` })
+              return
+            }
+            const ids = new Set((msg.result?.authMethods ?? []).map((m) => m.id).filter((id): id is string => typeof id === 'string'))
+            const methodId = args.env.XAI_API_KEY && ids.has('xai.api_key') ? 'xai.api_key'
+              : ids.has('cached_token') ? 'cached_token'
+              : null
+            if (!methodId) {
+              finish({ ok: false, detail: GROK_AUTH_HINT })
+              return
+            }
+            stage = 'auth'
+            writeRpc({ jsonrpc: '2.0', id: authId, method: 'authenticate', params: { methodId, _meta: { headless: true } } })
+            continue
+          }
+          if (stage === 'auth' && msg.id === authId) {
+            if (msg.error?.message) {
+              finish({ ok: false, detail: `${GROK_AUTH_HINT} (${String(msg.error.message).slice(0, 240)})` })
+              return
+            }
+            stage = 'session'
+            writeRpc({ jsonrpc: '2.0', id: newSessionId, method: 'session/new', params: { cwd: args.cwd, mcpServers: [] } })
+            continue
+          }
+          if (stage === 'session' && msg.id === newSessionId) {
+            if (msg.error?.message) {
+              finish({ ok: false, detail: `acp session/new failed: ${String(msg.error.message).slice(0, 240)}` })
+              return
+            }
+            finish({ ok: true, detail: '' })
+            return
+          }
+        }
+      })
+      child.stderr?.on('data', (b: Buffer) => {
+        const tail = stderrTail + b.toString('utf8')
+        stderrTail = tail.length > 2000 ? tail.slice(-2000) : tail
+      })
+      child.on('error', (err) => finish({ ok: false, detail: `spawn error: ${err.message}` }))
+      child.on('close', (code, sig) => {
+        if (settled) return
+        const where = stage === 'init' ? 'before initialize ack' : stage === 'auth' ? 'before authenticate ack' : 'before session/new ack'
+        const exit = sig ? `terminated by ${sig}` : `exit ${code}`
+        finish({ ok: false, detail: `acp died ${where} (${exit}): ${salientError(stderrTail) || 'no stderr'}` })
+      })
+    })
+  }
+
+  seedHome(home: string, persona: EnginePersona): Promise<void> {
+    return seedAgentsMdHome(home, persona)
+  }
+
+  run(args: EngineRunArgs): Promise<EngineRunResult> {
+    const flags = extraArgs('CUMORA_GROK_ARGS')
+    const model = args.model ? ['--model', args.model] : []
+    const resume = args.resumeSessionId ? ['--session-id', args.resumeSessionId] : []
+    const { command, shell, wantsStdinPrompt } = resolveSpawn(this.bin)
+    const base = flags.length
+      ? ['-p', ...flags]
+      : ['-p', ...this.headlessFlags(args.home), ...resume, ...model]
+    const argv = wantsStdinPrompt ? base : this.withPrompt(base, args.prompt)
+    return spawnEngine(command, argv, args, { shell, stdinText: wantsStdinPrompt ? args.prompt : undefined })
+  }
+
+  startSession(args: EngineSessionArgs): EngineSession | null {
+    if (extraArgs('CUMORA_GROK_ARGS').length) return null
+    const spawnArgs = ['--no-auto-update', 'agent', 'stdio']
+    if (args.model) spawnArgs.splice(1, 0, '--model', args.model)
+    return new GrokAcpSession(this.bin, spawnArgs, args.home, args.env, args)
+  }
+
+  private headlessFlags(cwd: string): string[] {
+    return ['--always-approve', '--output-format', 'json', '--cwd', cwd, '--no-auto-update', '--no-alt-screen']
+  }
+
+  private withPrompt(base: string[], prompt: string): string[] {
+    const i = base.indexOf('-p')
+    if (i >= 0) {
+      const out = base.slice()
+      out.splice(i + 1, 0, prompt)
+      return out
+    }
+    return [...base, prompt]
+  }
+}
+
 const ADAPTERS: Record<EngineId, EngineAdapter> = {
   claude: new ClaudeAdapter(),
   codex: new CodexAdapter(),
@@ -2218,6 +2628,7 @@ const ADAPTERS: Record<EngineId, EngineAdapter> = {
   pi: new PiFamilyAdapter('pi', 'pi', 'CUMORA_PI_ARGS'),
   omp: new PiFamilyAdapter('omp', 'omp', 'CUMORA_OMP_ARGS'),
   dsh: new DshAdapter(),
+  grok: new GrokAdapter(),
 }
 
 export function getAdapter(id: EngineId): EngineAdapter {

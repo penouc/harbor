@@ -30,7 +30,7 @@
  *
  * What this is NOT for:
  *   - BYOA-local LLM calls (the operator's paired claude / codex / opencode /
- *     pi / omp / dsh CLI). Those
+ *     pi / omp / dsh / grok CLI). Those
  *     are billed against the operator's own subscription, not Cumora's sub2api,
  *     and are already accounted for in `agent_triages` (BYOA triage rows) +
  *     `agent_runs` (BYOA turn rows) with `source='byoa-*'`. Putting them into

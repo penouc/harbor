@@ -4,7 +4,7 @@
  * A Computer is the host an agent runs on (see docs/BYOA.md). Cumora Cloud
  * is the built-in managed computer; the user pairs their own machines (a
  * Mac, a VPS) which run the `cumora agent computer` daemon and a local
- * engine (Claude Code, Codex, OpenCode, Pi, omp, or dsh).
+ * engine (Claude Code, Codex, OpenCode, Pi, omp, dsh, or Grok Build).
  *
  * This module owns the data-access + credential plumbing so the route
  * layer (api/router.ts) stays thin and this logic stays unit-testable:
@@ -20,7 +20,7 @@ import { publish, CH_STATUS } from '../../redis.js'
 import { signAgentToken } from '../runtime/jwt.js'
 
 export type ComputerKind = 'cloud' | 'local' | 'vps'
-export type EngineId = 'managed' | 'claude' | 'codex' | 'opencode' | 'pi' | 'omp' | 'dsh'
+export type EngineId = 'managed' | 'claude' | 'codex' | 'opencode' | 'pi' | 'omp' | 'dsh' | 'grok'
 export type ComputerStatus = 'online' | 'offline' | 'busy'
 
 /** How long a paired computer can go without a heartbeat before the sweep
@@ -47,7 +47,7 @@ export async function announceComputerOnline(computerId: string, companyId: stri
 /** Engines a paired (non-cloud) computer is allowed to advertise.
  *  Must stay in lockstep with ENGINE_IDS in engine.ts — pairComputer and
  *  assignAgentToComputer drop anything not in this set. */
-const PAIRABLE_ENGINES: ReadonlySet<string> = new Set(['claude', 'codex', 'opencode', 'pi', 'omp', 'dsh'])
+const PAIRABLE_ENGINES: ReadonlySet<string> = new Set(['claude', 'codex', 'opencode', 'pi', 'omp', 'dsh', 'grok'])
 
 export function isPairableEngine(id: string): boolean {
   return PAIRABLE_ENGINES.has(id)
@@ -375,6 +375,7 @@ export async function listAgentsForComputer(computerId: string): Promise<
     pi: 'CUMORA_DEFAULT_PI_MODEL',
     omp: 'CUMORA_DEFAULT_OMP_MODEL',
     dsh: 'CUMORA_DEFAULT_DSH_MODEL',
+    grok: 'CUMORA_DEFAULT_GROK_MODEL',
   }
   return rows.map((r) => {
     if (r.model) return r
