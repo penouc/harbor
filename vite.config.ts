@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { VitePWA } from 'vite-plugin-pwa'
 import path from 'node:path'
 
 // Vite proxy target. Default points at the local dev server; set
@@ -8,8 +9,44 @@ import path from 'node:path'
 const HTTP_TARGET = process.env.CUMORA_DEV_API_TARGET || 'http://localhost:5181'
 const WS_TARGET = HTTP_TARGET.replace(/^http/, 'ws')
 
+/** Live endpoints the service worker must never serve from cache.
+ *  Workbox does not intercept WebSocket upgrades; NetworkOnly is extra
+ *  safety for any HTTP hit to these prefixes. */
+const LIVE_PATH_DENYLIST = [
+  /^\/api(?:\/|$)/,
+  /^\/runtime(?:\/|$)/,
+  /^\/uploads(?:\/|$)/,
+  /^\/ws(?:\/|$)/,
+]
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    VitePWA({
+      // Silent skip-waiting / clientsClaim. Manifest lives in
+      // public/manifest.webmanifest (already linked from index.html).
+      registerType: 'autoUpdate',
+      injectRegister: false,
+      filename: 'sw.js',
+      scope: '/',
+      manifest: false,
+      includeAssets: ['favicon-32.png', 'icon-192.png', 'icon.png'],
+      workbox: {
+        // App-shell only: hashed Vite assets + HTML. Do not precache
+        // public/skype-emojis, starter-avatars, or everyone.png (~18MB).
+        globPatterns: ['**/*.{js,css,html,ico,webmanifest,woff,woff2}'],
+        navigateFallback: 'index.html',
+        navigateFallbackDenylist: LIVE_PATH_DENYLIST,
+        cleanupOutdatedCaches: true,
+        runtimeCaching: [
+          {
+            urlPattern: /^https?:\/\/[^/]+\/(?:api|runtime|uploads|ws)(?:\/|$)/,
+            handler: 'NetworkOnly',
+          },
+        ],
+      },
+    }),
+  ],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
