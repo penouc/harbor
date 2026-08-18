@@ -408,8 +408,8 @@ runtimeRouter.post('/triage', withAgent(async (c, req, res) => {
   res.json({ ok: true })
 }))
 
-// Per-HOP trajectory for BYOA agents. The daemon's ClaudeSession /
-// CodexSession emits one EngineHopReport per assistant message (Claude) or
+// Per-HOP trajectory for BYOA agents. The daemon's engine sessions emit one
+// EngineHopReport per assistant hop (or turn, depending on the engine) and
 // per turn-completed (Codex) and batches them into one POST per N hops or
 // every ~250ms (whichever first). This endpoint accepts a batch + inserts
 // one llm_calls row per hop with the appropriate source ('byoa-claude' |
@@ -433,11 +433,14 @@ runtimeRouter.post('/llm-calls', withAgent(async (c, req, res) => {
       extras?: Record<string, unknown>
     }>
   } | undefined
-  const source = (body?.source === 'byoa-claude' || body?.source === 'byoa-codex') ? body.source : 'byoa-claude'
   const daemonVersion = typeof body?.daemonVersion === 'string' && body.daemonVersion.trim() ? body.daemonVersion.trim().slice(0, 32) : null
   const hops = Array.isArray(body?.hops) ? body!.hops : []
   if (hops.length === 0) { res.json({ ok: true, inserted: 0 }); return }
   const { recordLlmCall } = await import('../llm-ledger.js')
+  type LlmCallSource = import('../llm-ledger.js').LlmCallSource
+  const source: LlmCallSource = (typeof body?.source === 'string' && body.source.startsWith('byoa-'))
+    ? body.source as LlmCallSource
+    : 'byoa-claude'
   // Whitelist purposes the daemon may declare — anything else gets coerced
   // to 'agent-turn' so a future daemon version naming an unknown purpose
   // doesn't smuggle a free-form string into the rollup.

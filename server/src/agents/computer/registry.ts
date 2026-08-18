@@ -4,7 +4,7 @@
  * A Computer is the host an agent runs on (see docs/BYOA.md). Cumora Cloud
  * is the built-in managed computer; the user pairs their own machines (a
  * Mac, a VPS) which run the `cumora agent computer` daemon and a local
- * engine (Claude Code / Codex).
+ * engine (Claude Code, Codex, OpenCode, Pi, omp, dsh, or Grok Build).
  *
  * This module owns the data-access + credential plumbing so the route
  * layer (api/router.ts) stays thin and this logic stays unit-testable:
@@ -20,7 +20,7 @@ import { publish, CH_STATUS } from '../../redis.js'
 import { signAgentToken } from '../runtime/jwt.js'
 
 export type ComputerKind = 'cloud' | 'local' | 'vps'
-export type EngineId = 'managed' | 'claude' | 'codex'
+export type EngineId = 'managed' | 'claude' | 'codex' | 'opencode' | 'pi' | 'omp' | 'dsh' | 'grok'
 export type ComputerStatus = 'online' | 'offline' | 'busy'
 
 /** How long a paired computer can go without a heartbeat before the sweep
@@ -44,8 +44,14 @@ export async function announceComputerOnline(computerId: string, companyId: stri
   await broadcastComputerStatus(computerId, companyId, 'online')
 }
 
-/** Engines a paired (non-cloud) computer is allowed to advertise. */
-const PAIRABLE_ENGINES: ReadonlySet<string> = new Set(['claude', 'codex'])
+/** Engines a paired (non-cloud) computer is allowed to advertise.
+ *  Must stay in lockstep with ENGINE_IDS in engine.ts — pairComputer and
+ *  assignAgentToComputer drop anything not in this set. */
+const PAIRABLE_ENGINES: ReadonlySet<string> = new Set(['claude', 'codex', 'opencode', 'pi', 'omp', 'dsh', 'grok'])
+
+export function isPairableEngine(id: string): boolean {
+  return PAIRABLE_ENGINES.has(id)
+}
 
 export interface ComputerRow {
   id: string
@@ -349,11 +355,10 @@ export async function mintAgentRuntimeToken(args: {
  *  overrides so the daemon can pass them to the engine.
  *
  *  When a row has no explicit model, fall back to the deploy-level default
- *  (CUMORA_DEFAULT_CLAUDE_MODEL / CUMORA_DEFAULT_CODEX_MODEL) so every BYOA
- *  daemon gets a consistent pin — independent of whatever model the local
- *  `claude` / `codex` CLI happens to default to today. Critical: a model
- *  upgrade in the underlying CLI (e.g. claude 4.7 → 4.8) silently changes
- *  agent behavior on every user's machine unless we pin here. */
+ *  (`CUMORA_DEFAULT_<ENGINE>_MODEL`) so every BYOA daemon gets a consistent
+ *  pin — independent of whatever the local CLI happens to default to today.
+ *  Unset env → leave model null and let the engine use its own default.
+ *  Do not bake provider/model ids here (Pi/omp/OpenCode users bring their own auth). */
 export async function listAgentsForComputer(computerId: string): Promise<
   Array<{ id: string; name: string; role: string | null; engine: EngineId | null; model: string | null; fastModel: string | null }>
 > {
@@ -363,11 +368,19 @@ export async function listAgentsForComputer(computerId: string): Promise<
       ORDER BY name ASC`,
     [computerId],
   )
-  const claudeDefault = process.env.CUMORA_DEFAULT_CLAUDE_MODEL?.trim() || null
-  const codexDefault = process.env.CUMORA_DEFAULT_CODEX_MODEL?.trim() || null
+  const defaultModelEnv: Record<string, string> = {
+    claude: 'CUMORA_DEFAULT_CLAUDE_MODEL',
+    codex: 'CUMORA_DEFAULT_CODEX_MODEL',
+    opencode: 'CUMORA_DEFAULT_OPENCODE_MODEL',
+    pi: 'CUMORA_DEFAULT_PI_MODEL',
+    omp: 'CUMORA_DEFAULT_OMP_MODEL',
+    dsh: 'CUMORA_DEFAULT_DSH_MODEL',
+    grok: 'CUMORA_DEFAULT_GROK_MODEL',
+  }
   return rows.map((r) => {
     if (r.model) return r
-    const dflt = r.engine === 'codex' ? codexDefault : r.engine === 'claude' ? claudeDefault : null
+    const envName = r.engine ? defaultModelEnv[r.engine] : undefined
+    const dflt = envName ? (process.env[envName]?.trim() || null) : null
     return dflt ? { ...r, model: dflt } : r
   })
 }

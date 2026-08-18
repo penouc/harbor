@@ -1,4 +1,4 @@
-# BYOA — Bring Your Own Agent (local Claude Code / Codex as the engine)
+# BYOA — Bring Your Own Agent (local CLI engines)
 
 Every Cumora agent has a "brain" and a host. The managed path is
 server-side: `runAgentTurn` in `server/src/agents/turn.ts` runs a
@@ -6,8 +6,8 @@ multi-hop loop against the OpenAI Responses API, with the agent's body in
 a per-agent Kubernetes pod (the `agent-computer` image).
 
 **BYOA** lets a user supply the brain instead: a long-running daemon on
-the user's own machine (laptop **or** VPS) drives a local **Claude Code**
-or **Codex CLI** as the reasoning engine, on the user's own
+the user's own machine (laptop **or** VPS) drives a local **Claude Code**,
+**Codex**, **OpenCode**, **Pi**, **omp**, **dsh**, or **Grok Build** CLI as the reasoning engine, on the user's own
 subscription — the server never holds the user's provider credentials.
 One daemon hosts **many independent agents** — each with its own isolated
 home directory, memory, skills, and notes. In Cumora these still appear
@@ -37,8 +37,8 @@ managed cloud agents and local agents into the same picture.
   Engine is `managed` (the server's own `turn.ts` loop). Nothing for the
   user to set up; it's always online.
 - **Your computers** — machines you pair (your Mac, a VPS). Each runs the
-  `cumora agent computer` daemon with a local engine (Claude Code /
-  Codex). Agents you place here are BYOA agents.
+  `cumora agent computer` daemon with a local engine (Claude Code,
+  Codex, OpenCode, Pi, omp, dsh, or Grok Build). Agents you place here are BYOA agents.
 
 ```
 Computers
@@ -177,12 +177,12 @@ from their own agenda — Kanban cards and due calendar slots — via
 ## Engine integration
 
 `server/src/agents/computer/engine.ts` defines one `EngineAdapter` per
-engine (`claude`, `codex`). The **primary** path is a persistent
+engine (`claude`, `codex`, `opencode`, `pi`, `omp`, `dsh`, `grok`). The **primary** path is a persistent
 per-agent session; one-shot `run()` is the fallback.
 
 ```ts
 interface EngineAdapter {
-  id: 'claude' | 'codex'
+  id: 'claude' | 'codex' | 'opencode' | 'pi' | 'omp' | 'dsh' | 'grok'
   seedHome(home, persona)          // lay out CLAUDE.md/AGENTS.md, skills, dirs
   startSession?(args): EngineSession | null   // persistent session (primary)
   run(args): Promise<…>            // one-shot fallback
@@ -206,14 +206,33 @@ interface EngineSession {
 | Memory / persona file | `CLAUDE.md` | `AGENTS.md` |
 | Triage (small brain) | `claude -p --model haiku --output-format json` | `codex exec --model gpt-5.4-mini` |
 
+| Concern | OpenCode | Pi | omp | dsh | Grok Build |
+| --- | --- | --- | --- | --- | --- |
+| Persistent session | `opencode acp --cwd <home>` (ACP JSON-RPC nd-JSON: `initialize` → `session/new`/`load` → `session/prompt`; auto-allow `session/request_permission`). No mid-turn steer — queued steer is the next `session/prompt` | `pi --mode rpc` JSONL; wait for `agent_settled` (not `agent_end`); steer `{type:"steer"}` | Same as Pi (`omp --mode rpc`) | none — CLI has no stable stdio RPC | `grok --no-auto-update agent stdio` (ACP JSON-RPC nd-JSON: `initialize` with fs+terminal → `authenticate` (`xai.api_key` if `XAI_API_KEY` is set, else `cached_token`, `_meta.headless`) → `session/new`/`load` → `session/prompt`). Assistant text arrives as `session/update` `agent_message_chunk`. Auto-allow `session/request_permission`. Never opens a browser. |
+| One-shot fallback | `opencode run --auto --format json --dir <home>` | `pi -p --mode json --no-session --approve` | `omp -p --mode json --no-session --approve` | `dsh --profile headless "<prompt>"` | `grok -p "<prompt>" --always-approve --output-format json --cwd <home> --no-auto-update --no-alt-screen` (optional `--session-id` to resume) |
+| Fallback triggers | `CUMORA_OPENCODE_ARGS` set | `CUMORA_PI_ARGS` set | `CUMORA_OMP_ARGS` set | always (one-shot only); `CUMORA_DSH_ARGS` replaces flags | `CUMORA_GROK_ARGS` set |
+| Memory / persona file | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` |
+| Triage (small brain) | `opencode run --auto --format json` (engine default unless `CUMORA_TRIAGE_MODEL`) | `pi -p --mode json --no-session --approve` | `omp -p --mode json --no-session --approve` | `dsh --profile headless` | `grok -p … --always-approve --output-format json --no-auto-update` (engine default unless `CUMORA_TRIAGE_MODEL`) |
+| Ledger `source` | `byoa-opencode` | `byoa-pi` | `byoa-omp` | `byoa-dsh` | `byoa-grok` |
+
+Adapters are **private classes** registered in `ADAPTERS` and reached via
+`getAdapter(id)` — they are not exported as `claudeAdapter` / `codexAdapter`.
+Pair/assign filter advertised engines through `PAIRABLE_ENGINES` in
+`registry.ts` (must stay in lockstep with `ENGINE_IDS`; `managed` is never
+pairable). Hop/triage rows use `byoa-${adapter.id}`.
+
 Sessions carry a resume id (`~/.cumora/sessions/<agentId>.session`); a
 failed resume falls back to a fresh thread instead of wedging the agent.
 Engines run headless with their permission prompts disabled, scoped to
 the agent's isolated home. On Windows the daemon resolves the real
-`claude`/`codex` `.cmd` shims and routes large prompts via stdin.
+engine `.cmd` shims and routes large prompts via stdin.
 Model selection: the per-agent `participants.model` / `fast_model`
-columns, else the deploy-level `CUMORA_DEFAULT_CLAUDE_MODEL` /
-`CUMORA_DEFAULT_CODEX_MODEL` pins.
+columns, else an optional deploy-level pin
+(`CUMORA_DEFAULT_CLAUDE_MODEL` / `CUMORA_DEFAULT_CODEX_MODEL` /
+`CUMORA_DEFAULT_OPENCODE_MODEL` / `CUMORA_DEFAULT_PI_MODEL` /
+`CUMORA_DEFAULT_OMP_MODEL` / `CUMORA_DEFAULT_DSH_MODEL` / `CUMORA_DEFAULT_GROK_MODEL`). Unset → the
+engine's own default. Do not bake a provider model id for OpenCode / Pi /
+omp / dsh / Grok Build.
 
 ---
 
@@ -272,7 +291,7 @@ CREATE TABLE computers (
   owner_user_id     TEXT,            -- null for the managed Cumora Cloud row
   name              TEXT NOT NULL,   -- "Cumora Cloud", "MacBook Pro", …
   kind              TEXT NOT NULL,   -- 'cloud' | 'local' | 'vps'
-  available_engines JSONB,           -- ['claude','codex'] (daemon-detected)
+  available_engines JSONB,           -- daemon-detected pairable engines
   status            TEXT NOT NULL,   -- 'online' | 'offline' | 'busy'
   last_seen_at      TIMESTAMP,
   credential_hash   TEXT,            -- SHA256 of the device token
@@ -285,7 +304,7 @@ CREATE TABLE computers (
 
 -- participants carry their host + engine + models
 --   computer_id  TEXT   (FK → computers.id)
---   engine       TEXT   ('managed' | 'claude' | 'codex')
+--   engine       TEXT   ('managed' | pairable EngineId)
 --   model        TEXT   (big-brain override)
 --   fast_model   TEXT   (small-brain override)
 ```

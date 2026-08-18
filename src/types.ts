@@ -6,8 +6,30 @@ export type Status = 'avail' | 'working' | 'thinking' | 'waiting' | 'resting'
  *  'local'/'vps' = a computer the user paired, running the BYOA daemon. */
 export type ComputerKind = 'cloud' | 'local' | 'vps'
 export type ComputerStatus = 'online' | 'offline' | 'busy'
+export type PairableEngineId = 'claude' | 'codex' | 'opencode' | 'pi' | 'omp' | 'dsh' | 'grok'
 /** Engine an agent's host runs it on. 'managed' = Cumora's server-side loop. */
-export type EngineId = 'managed' | 'claude' | 'codex'
+export type EngineId = 'managed' | PairableEngineId
+
+export const PAIRABLE_ENGINE_OPTIONS: ReadonlyArray<{ id: PairableEngineId; label: string; bin: string }> = [
+  { id: 'claude', label: 'Claude Code', bin: 'claude' },
+  { id: 'codex', label: 'Codex', bin: 'codex' },
+  { id: 'opencode', label: 'OpenCode', bin: 'opencode' },
+  { id: 'pi', label: 'Pi', bin: 'pi' },
+  { id: 'omp', label: 'omp', bin: 'omp' },
+  { id: 'dsh', label: 'dsh', bin: 'dsh' },
+  { id: 'grok', label: 'Grok Build', bin: 'grok' },
+]
+
+export const ENGINE_LABEL: Record<EngineId, string> = {
+  managed: 'Cumora',
+  claude: 'Claude Code',
+  codex: 'Codex',
+  opencode: 'OpenCode',
+  pi: 'Pi',
+  omp: 'omp',
+  dsh: 'dsh',
+  grok: 'Grok Build',
+}
 
 export interface Computer {
   id: string

@@ -10,6 +10,7 @@ import { Checkbox } from '@/components/Checkbox'
 import { cn } from '@/lib/utils'
 import { isWindows } from '@/lib/runtime'
 import { api, getServerOrigin, type ApiProject, type ApiQuotaSnapshot, type ApiQuotaWindow } from '@/api/client'
+import { ENGINE_LABEL, PAIRABLE_ENGINE_OPTIONS, type PairableEngineId } from '@/types'
 
 const tabs = ['Profile', 'Usage', 'Computers', 'Projects', 'Trust & autonomy', 'Preferences'] as const
 type Tab = (typeof tabs)[number]
@@ -695,7 +696,6 @@ function SkypeSoundSection() {
   )
 }
 
-const ENGINE_LABEL: Record<string, string> = { managed: 'Cumora', claude: 'Claude Code', codex: 'Codex' }
 const KIND_ICON: Record<string, string> = { cloud: '☁', local: '💻', vps: '🖥' }
 const STATUS_COLOR: Record<string, string> = { online: '#3BB273', busy: '#E6A23C', offline: 'var(--ink-300)' }
 
@@ -708,8 +708,9 @@ function ComputersTab() {
   const [code, setCode] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   // Engine for a NEWLY added computer's starter/assigned agents. Claude is the
-  // default (no flag → daemon auto-detects); Codex appends `--engine codex`.
-  const [engine, setEngine] = useState<'claude' | 'codex'>('claude')
+  // default (no `--engine` flag → daemon auto-detects); other engines append
+  // `--engine <id>` (codex / opencode / pi / omp / dsh / grok).
+  const [engine, setEngine] = useState<PairableEngineId>('claude')
   // Default on: install the always-on service (auto-start/restart/update).
   // --install-service is macOS/Linux only (daemon throws on Windows) → off + hidden there.
   const [asService, setAsService] = useState(!isWindows)
@@ -734,9 +735,9 @@ function ComputersTab() {
     setCopied(true)
   }
 
-  const origin = getServerOrigin()
+  const origin = getServerOrigin() || window.location.origin
   const serverFlag = origin ? ` --server ${origin}` : ''
-  const pairCommand = code ? `npx cumora@latest agent computer --pair ${code}${serverFlag}${engine === 'codex' ? ' --engine codex' : ''}${asService ? ' --install-service' : ''}` : ''
+  const pairCommand = code ? `npx cumora@latest agent computer --pair ${code}${serverFlag}${engine === 'claude' ? '' : ` --engine ${engine}`}${asService ? ' --install-service' : ''}` : ''
   const list = Object.values(byId).sort((a, b) =>
     (a.kind === 'cloud' ? 0 : 1) - (b.kind === 'cloud' ? 0 : 1) || a.name.localeCompare(b.name))
 
@@ -773,9 +774,8 @@ function ComputersTab() {
       <Section title="↳ Where your agents run">
         <p className="text-[13px] text-ink-500 mb-4 max-w-[640px]">
           Every agent runs on a <strong>Computer</strong>. <em>Cumora Cloud</em> is built in and
-          always on. Pair your own machine or a VPS to run agents on your local
-          <span className="font-mono text-[12px]"> Claude Code</span> or
-          <span className="font-mono text-[12px]"> Codex</span> — each agent gets its own isolated
+          always on. Pair your own machine or a VPS to run agents on a local CLI engine
+          <span className="font-mono text-[12px]"> (claude, codex, opencode, pi, omp, dsh, grok)</span> — each agent gets its own isolated
           workspace, memory and skills there.
         </p>
 
@@ -856,12 +856,13 @@ function ComputersTab() {
               Run this on the machine you want to host agents:
             </div>
             <div className="text-[11.5px] text-ink-500 mb-2.5 italic font-display">
-              Needs <span className="font-mono not-italic">claude</span> or <span className="font-mono not-italic">codex</span> installed. The computer names itself after that machine and appears here once paired. This token stays valid.
+              Needs a supported engine on PATH
+              <span className="font-mono not-italic"> (claude, codex, opencode, pi, omp, dsh, or grok)</span>. The computer names itself after that machine and appears here once paired. This token stays valid.
             </div>
             <div className="flex items-center gap-2.5 mb-2.5">
               <span className="text-[12px] text-ink-500">Engine</span>
-              <div className="inline-flex rounded-[9px] p-0.5" style={{ background: 'var(--ink-100)' }}>
-                {([['claude', 'Claude Code'], ['codex', 'Codex']] as const).map(([id, label]) => (
+              <div className="inline-flex flex-wrap rounded-[9px] p-0.5 gap-0.5" style={{ background: 'var(--ink-100)' }}>
+                {PAIRABLE_ENGINE_OPTIONS.map(({ id, label }) => (
                   <button key={id} type="button" onClick={() => setEngine(id)}
                     className="px-3 py-1 rounded-[7px] text-[12px] font-semibold transition-colors duration-150"
                     style={engine === id
@@ -871,7 +872,7 @@ function ComputersTab() {
                   </button>
                 ))}
               </div>
-              <span className="text-[11px] text-ink-400">just the default — this computer can still run agents on either engine</span>
+              <span className="text-[11px] text-ink-400">just the default — this computer can still run agents on any installed engine</span>
             </div>
             {isWindows ? (
               <div className="mb-2.5 text-[12px] text-ink-600">

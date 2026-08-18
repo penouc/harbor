@@ -8,7 +8,7 @@ import { useAuth } from '@/stores/auth'
 import { Input } from '@/components/Input'
 import { TextArea } from '@/components/TextArea'
 import { Select } from '@/components/Select'
-import type { Participant, EngineId } from '@/types'
+import { ENGINE_LABEL, type Participant, type EngineId } from '@/types'
 
 const PALETTE = [
   '#FFB088', '#FFD9D2', '#FFB7AF', '#F4B740',
@@ -56,7 +56,7 @@ export function AgentEditor({ agent, onClose }: Props) {
   const selectedComputer = computerId ? computersById[computerId] : undefined
   const isByoa = !!selectedComputer && selectedComputer.kind !== 'cloud'
   const selectedComputerOffline = isByoa && selectedComputer.status !== 'online'
-  const origin = getServerOrigin()
+  const origin = getServerOrigin() || window.location.origin
   const repairCommand = repairCode
     ? `npx cumora@latest agent computer --pair ${repairCode}${origin ? ` --server ${origin}` : ''}`
     : ''
@@ -239,7 +239,14 @@ export function AgentEditor({ agent, onClose }: Props) {
           <Field
             label={isByoa ? 'Big-brain model (大脑)' : 'Model'}
             hint={isByoa
-              ? `Main reasoning model passed to the engine as --model. ${engine === 'codex' ? 'A model name (e.g. gpt-5.5, o3).' : "A Claude alias or full name (e.g. opus, sonnet, claude-sonnet-4-6)."} Blank = engine default.`
+              ? `Main reasoning model passed to the engine as --model. ${
+                  engine === 'codex' ? 'A model name (e.g. gpt-5.5, o3).'
+                    : engine === 'claude' ? "A Claude alias or full name (e.g. opus, sonnet, claude-sonnet-4-6)."
+                    : engine === 'opencode' ? 'OpenCode model id as provider/model (your auth).'
+                    : engine === 'dsh' ? 'Optional; dsh uses its own default (typically DeepSeek).'
+                    : engine === 'grok' ? 'A model id your grok CLI accepts (your xAI auth). Blank uses the CLI default — Harbor does not pin one.'
+                    : 'A model id your engine accepts (your auth).'
+                } Blank = engine default.`
               : 'Optional — leave blank to use the system default. Any OpenAI model name works (e.g. gpt-5.5, gpt-5.5-pro, gpt-5.5-mini).'}
           >
             <Input
@@ -257,7 +264,9 @@ export function AgentEditor({ agent, onClose }: Props) {
               label="Small-brain model (小脑)"
               hint={engine === 'codex'
                 ? 'Cheaper model for light auxiliary tasks (e.g. gpt-5.4-mini). Blank = same as big-brain.'
-                : "Cheaper/faster model for light auxiliary tasks — maps to Claude's ANTHROPIC_SMALL_FAST_MODEL. Blank = engine default."}
+                : engine === 'claude'
+                  ? "Cheaper/faster model for light auxiliary tasks — maps to Claude's ANTHROPIC_SMALL_FAST_MODEL. Blank = engine default."
+                  : 'Cheaper/faster model for light auxiliary tasks when the engine supports it. Blank = engine default.'}
             >
               <Input
                 type="text"
@@ -272,7 +281,7 @@ export function AgentEditor({ agent, onClose }: Props) {
 
           <Field
             label="Runs on"
-            hint="Which computer executes this agent. Cumora Cloud is managed; a computer you've paired runs it on your local Claude Code or Codex."
+            hint="Which computer executes this agent. Cumora Cloud is managed; a computer you've paired runs it on your local engine (Claude Code, Codex, OpenCode, Pi, omp, dsh, or Grok Build)."
           >
             <Select
               ariaLabel="Runs on"
@@ -305,7 +314,7 @@ export function AgentEditor({ agent, onClose }: Props) {
                   options={(selectedComputer.availableEngines.length
                     ? selectedComputer.availableEngines
                     : (['claude'] as EngineId[])
-                  ).map((en) => ({ value: en, label: en === 'claude' ? 'Claude Code' : en === 'codex' ? 'Codex' : en }))}
+                  ).map((en) => ({ value: en, label: ENGINE_LABEL[en] ?? en }))}
                 />
               </div>
             )}
