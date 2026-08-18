@@ -35,6 +35,11 @@ export default defineConfig({
         // App-shell only: hashed Vite assets + HTML. Do not precache
         // public/skype-emojis, starter-avatars, or everyone.png (~18MB).
         globPatterns: ['**/*.{js,css,html,ico,webmanifest,woff,woff2}'],
+        // Main renderer chunk is ~2.2MB minified (existing SPA). Default
+        // Workbox cap is 2MiB and would drop it from the app-shell cache.
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
+        skipWaiting: true,
+        clientsClaim: true,
         navigateFallback: 'index.html',
         navigateFallbackDenylist: LIVE_PATH_DENYLIST,
         cleanupOutdatedCaches: true,
