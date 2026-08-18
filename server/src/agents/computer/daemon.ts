@@ -1203,7 +1203,9 @@ class AgentRunner {
   }
 
   /** Triage model id for pricing (the local cerebellum: claude→haiku,
-   *  codex→gpt-5.4-mini), honoring a CUMORA_TRIAGE_MODEL override. */
+   *  codex→gpt-5.4-mini). Other engines report `adapter.id` unless
+   *  CUMORA_TRIAGE_MODEL is set — we don't guess a provider model they
+   *  may not have. */
   private triageModel(): string {
     return process.env.CUMORA_TRIAGE_MODEL || (
       this.adapter.id === 'claude' ? 'haiku'
@@ -1216,7 +1218,7 @@ class AgentRunner {
    *  engine's raw breakdown (claude); undefined → recorded as unmeasured (codex). */
   private async recordTriageUsage(token: string, actionable: boolean, reason: string, usage?: EngineUsage): Promise<void> {
     await runtimeBest(this.cfg.serverUrl, '/triage', token, {
-      source: `byoa-${this.adapter.id}`,
+      source: byoaSource(this.adapter.id),
       model: this.triageModel(),
       actionable,
       reason,

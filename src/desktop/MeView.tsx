@@ -708,7 +708,8 @@ function ComputersTab() {
   const [code, setCode] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   // Engine for a NEWLY added computer's starter/assigned agents. Claude is the
-  // default (no flag → daemon auto-detects); Codex appends `--engine codex`.
+  // default (no `--engine` flag → daemon auto-detects); other engines append
+  // `--engine <id>` (codex / opencode / pi / omp / dsh).
   const [engine, setEngine] = useState<PairableEngineId>('claude')
   // Default on: install the always-on service (auto-start/restart/update).
   // --install-service is macOS/Linux only (daemon throws on Windows) → off + hidden there.

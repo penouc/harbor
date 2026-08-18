@@ -44,7 +44,7 @@ const CODEX_LOG_RAW = process.env.CUMORA_CODEX_VERBOSE === '1'
 
 /** How to spawn a CLI bin cross-platform.
  *  - POSIX: spawn the bare bin with shell:false — unchanged, zero-risk.
- *  - Windows: `claude`/`codex` are usually `.cmd` shims that Node CANNOT run with
+ *  - Windows: engine bins (`claude`/`codex`/`opencode`/`pi`/`omp`/`dsh`) are often `.cmd` shims that Node CANNOT run with
  *    shell:false (CreateProcess can't execute a batch file) → "process exited with
  *    code 1". Resolve the real file on PATH and run a `.cmd`/`.bat` via
  *    shell:true. When the shell is needed,
@@ -658,7 +658,7 @@ class ClaudeSession implements EngineSession {
     this.onHopUsage = opts.onHopUsage
     this.sid = opts.resumeSessionId ?? null
     this.carriesStandingPrompt = carriesStandingPrompt
-    // Cross-platform spawn: on Windows resolve the real claude(.cmd) + shell so a
+    // Cross-platform spawn: on Windows resolve the real engine(.cmd) + shell so a
     // .cmd shim runs (Node can't spawn it with shell:false). The prompt already
     // travels via stdin (stream-json), so no arg-quoting concerns here.
     const { command, shell } = resolveSpawn(bin)

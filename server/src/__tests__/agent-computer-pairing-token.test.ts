@@ -31,6 +31,17 @@ afterEach(() => {
   ;(pool as unknown as { query: typeof originalQuery }).query = originalQuery
 })
 
+test('isPairableEngine keeps opencode/pi/omp/dsh and rejects managed/unknown', () => {
+  assert.equal(registry.isPairableEngine('claude'), true)
+  assert.equal(registry.isPairableEngine('codex'), true)
+  assert.equal(registry.isPairableEngine('opencode'), true)
+  assert.equal(registry.isPairableEngine('pi'), true)
+  assert.equal(registry.isPairableEngine('omp'), true)
+  assert.equal(registry.isPairableEngine('dsh'), true)
+  assert.equal(registry.isPairableEngine('managed'), false)
+  assert.equal(registry.isPairableEngine('bogus'), false)
+})
+
 test('company add token is persistent and reattaches an existing host by name', async () => {
   let companyTokenSelected = false
   const calls = installPoolMock(({ sql }) => {
@@ -57,7 +68,7 @@ test('company add token is persistent and reattaches an existing host by name', 
   const paired = await registry.pairComputer({
     code: 'company-token',
     hostName: 'MacBook Air',
-    engines: ['claude', 'opencode', 'bogus'],
+    engines: ['claude', 'opencode', 'pi', 'omp', 'dsh', 'managed', 'bogus'],
     deferBroadcast: true,
   })
   assert.equal(paired?.computerId, 'comp-existing')
@@ -65,7 +76,7 @@ test('company add token is persistent and reattaches an existing host by name', 
 
   const update = calls.find((c) => /UPDATE computers\s+SET credential_hash/.test(c.sql))
   assert.ok(update, 'existing computer should be updated instead of inserting a duplicate')
-  assert.equal(update.params[1], JSON.stringify(['claude', 'opencode']))
+  assert.equal(update.params[1], JSON.stringify(['claude', 'opencode', 'pi', 'omp', 'dsh']))
   assert.equal(calls.some((c) => /INSERT INTO computers/.test(c.sql)), false)
 })
 

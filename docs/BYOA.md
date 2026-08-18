@@ -206,14 +206,33 @@ interface EngineSession {
 | Memory / persona file | `CLAUDE.md` | `AGENTS.md` |
 | Triage (small brain) | `claude -p --model haiku --output-format json` | `codex exec --model gpt-5.4-mini` |
 
+| Concern | OpenCode | Pi | omp | dsh |
+| --- | --- | --- | --- | --- |
+| Persistent session | `opencode acp --cwd <home>` (ACP JSON-RPC nd-JSON: `initialize` → `session/new`/`load` → `session/prompt`; auto-allow `session/request_permission`). No mid-turn steer — queued steer is the next `session/prompt` | `pi --mode rpc` JSONL; wait for `agent_settled` (not `agent_end`); steer `{type:"steer"}` | Same as Pi (`omp --mode rpc`) | none — CLI has no stable stdio RPC |
+| One-shot fallback | `opencode run --auto --format json --dir <home>` | `pi -p --mode json --no-session --approve` | `omp -p --mode json --no-session --approve` | `dsh --profile headless "<prompt>"` |
+| Fallback triggers | `CUMORA_OPENCODE_ARGS` set | `CUMORA_PI_ARGS` set | `CUMORA_OMP_ARGS` set | always (one-shot only); `CUMORA_DSH_ARGS` replaces flags |
+| Memory / persona file | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` |
+| Triage (small brain) | `opencode run --auto --format json` (engine default unless `CUMORA_TRIAGE_MODEL`) | `pi -p --mode json --no-session --approve` | `omp -p --mode json --no-session --approve` | `dsh --profile headless` |
+| Ledger `source` | `byoa-opencode` | `byoa-pi` | `byoa-omp` | `byoa-dsh` |
+
+Adapters are **private classes** registered in `ADAPTERS` and reached via
+`getAdapter(id)` — they are not exported as `claudeAdapter` / `codexAdapter`.
+Pair/assign filter advertised engines through `PAIRABLE_ENGINES` in
+`registry.ts` (must stay in lockstep with `ENGINE_IDS`; `managed` is never
+pairable). Hop/triage rows use `byoa-${adapter.id}`.
+
 Sessions carry a resume id (`~/.cumora/sessions/<agentId>.session`); a
 failed resume falls back to a fresh thread instead of wedging the agent.
 Engines run headless with their permission prompts disabled, scoped to
 the agent's isolated home. On Windows the daemon resolves the real
-`claude`/`codex` `.cmd` shims and routes large prompts via stdin.
+engine `.cmd` shims and routes large prompts via stdin.
 Model selection: the per-agent `participants.model` / `fast_model`
-columns, else the deploy-level `CUMORA_DEFAULT_CLAUDE_MODEL` /
-`CUMORA_DEFAULT_CODEX_MODEL` pins.
+columns, else an optional deploy-level pin
+(`CUMORA_DEFAULT_CLAUDE_MODEL` / `CUMORA_DEFAULT_CODEX_MODEL` /
+`CUMORA_DEFAULT_OPENCODE_MODEL` / `CUMORA_DEFAULT_PI_MODEL` /
+`CUMORA_DEFAULT_OMP_MODEL` / `CUMORA_DEFAULT_DSH_MODEL`). Unset → the
+engine's own default. Do not bake a provider model id for OpenCode / Pi /
+omp / dsh.
 
 ---
 

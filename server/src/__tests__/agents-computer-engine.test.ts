@@ -181,3 +181,14 @@ test('Pi RPC session waits for agent_settled, not agent_end', async () => {
   assert.equal(hops.length, 1)
   session.stop()
 })
+
+test('byoaSource is byoa-<engine id> for ledger/triage hops', async () => {
+  const { byoaSource, ENGINE_IDS } = await import('../agents/computer/engine.js')
+  assert.equal(byoaSource('claude'), 'byoa-claude')
+  assert.equal(byoaSource('codex'), 'byoa-codex')
+  assert.equal(byoaSource('opencode'), 'byoa-opencode')
+  assert.equal(byoaSource('pi'), 'byoa-pi')
+  assert.equal(byoaSource('omp'), 'byoa-omp')
+  assert.equal(byoaSource('dsh'), 'byoa-dsh')
+  for (const id of ENGINE_IDS) assert.equal(byoaSource(id), `byoa-${id}`)
+})
