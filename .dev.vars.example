@@ -6,4 +6,6 @@ DATABASE_URL=
 REDIS_URL=
 OPENAI_API_KEY=
 AGENT_RUNTIME_SECRET=
-# CUMORA_PUBLIC_ORIGIN=https://harbor.example.workers.dev
+# Production origin: https://raft.is-a-nice.app
+# Fallback:          https://harbor.penouc.workers.dev
+# CUMORA_PUBLIC_ORIGIN=https://harbor.penouc.workers.dev

@@ -3,8 +3,8 @@
  *
  * The Worker is a thin HTTP/WebSocket proxy. The Express app (+ built
  * Vite SPA) runs inside the container image built from ./Dockerfile.
- * See docs/CLOUDFLARE.md for secrets, Neon/Upstash, BYOA, and how to
- * attach raft.is-a-nice.app later.
+ * See docs/CLOUDFLARE.md for secrets, Neon/Upstash, BYOA, and the
+ * raft.is-a-nice.app custom domain (zone is-a-nice.app).
  *
  * Docs: https://developers.cloudflare.com/containers/
  */
@@ -14,6 +14,9 @@
 	"main": "workers/harbor/src/index.ts",
 	"compatibility_date": "2026-08-17",
 	"workers_dev": true,
+	"routes": [
+		{ "pattern": "raft.is-a-nice.app", "custom_domain": true },
+	],
 	"observability": {
 		"enabled": true,
 	},
@@ -60,11 +63,13 @@
 			"AGENT_RUNTIME_SECRET",
 		],
 	},
-	// Non-secret public origin. After the first workers.dev URL exists
-	// (or after attaching raft.is-a-nice.app), set this and redeploy so
-	// OAuth redirect_uri / invite links match the public hostname.
+	// Non-secret public origin. Set at deploy time so OAuth redirect_uri
+	// / invite / pairing links match the public hostname. Intended
+	// production origin is https://raft.is-a-nice.app; workers.dev
+	// (https://harbor.penouc.workers.dev) remains a fallback. Do not
+	// bake the value into committed vars.
 	// "vars": {
-	//   "CUMORA_PUBLIC_ORIGIN": "https://harbor.<YOUR_SUBDOMAIN>.workers.dev"
+	//   "CUMORA_PUBLIC_ORIGIN": "https://raft.is-a-nice.app"
 	// }
 	//
 	// Optional OpenAI-compatible provider. Empty OPENAI_BASE_URL = SDK
@@ -75,11 +80,4 @@
 	//   OPENAI_MODEL_SUPPORT=deepseek-v4-flash
 	//   OPENAI_COMPACTION_MODEL=deepseek-v4-flash
 	// OPENAI_API_KEY stays a required secret (that provider's key).
-	//
-	// Custom domain (later). Requires the hostname's zone to already sit
-	// on this Cloudflare account. Do not invent a zone_id. Dashboard
-	// path is documented in docs/CLOUDFLARE.md.
-	// "routes": [
-	//   { "pattern": "raft.is-a-nice.app", "custom_domain": true }
-	// ]
 }
