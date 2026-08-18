@@ -4,7 +4,7 @@
  * A Computer is the host an agent runs on (see docs/BYOA.md). Cumora Cloud
  * is the built-in managed computer; the user pairs their own machines (a
  * Mac, a VPS) which run the `cumora agent computer` daemon and a local
- * engine (Claude Code / Codex).
+ * engine (Claude Code, Codex, OpenCode, Pi, omp, or dsh).
  *
  * This module owns the data-access + credential plumbing so the route
  * layer (api/router.ts) stays thin and this logic stays unit-testable:
@@ -20,7 +20,7 @@ import { publish, CH_STATUS } from '../../redis.js'
 import { signAgentToken } from '../runtime/jwt.js'
 
 export type ComputerKind = 'cloud' | 'local' | 'vps'
-export type EngineId = 'managed' | 'claude' | 'codex'
+export type EngineId = 'managed' | 'claude' | 'codex' | 'opencode' | 'pi' | 'omp' | 'dsh'
 export type ComputerStatus = 'online' | 'offline' | 'busy'
 
 /** How long a paired computer can go without a heartbeat before the sweep
@@ -45,7 +45,7 @@ export async function announceComputerOnline(computerId: string, companyId: stri
 }
 
 /** Engines a paired (non-cloud) computer is allowed to advertise. */
-const PAIRABLE_ENGINES: ReadonlySet<string> = new Set(['claude', 'codex'])
+const PAIRABLE_ENGINES: ReadonlySet<string> = new Set(['claude', 'codex', 'opencode', 'pi', 'omp', 'dsh'])
 
 export interface ComputerRow {
   id: string

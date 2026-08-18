@@ -2,7 +2,7 @@
  * EngineAdapter — the pluggable "brain" for a BYOA agent.
  *
  * A BYOA agent's reasoning loop is delegated to a local CLI engine running
- * on the user's machine: Claude Code or Codex. The daemon (daemon.ts) hands
+ * on the user's machine: Claude Code, Codex, OpenCode, Pi, omp, or dsh. The daemon (daemon.ts) hands
  * each wake to an adapter, which spawns the engine headlessly in the agent's
  * isolated home directory. The engine reads its persona + memory + skills
  * from that home natively (CLAUDE.md / AGENTS.md, .claude/skills, …) and acts
@@ -14,7 +14,8 @@
  * NOTE on engine flags: the exact non-interactive / permission flags differ
  * across engine versions. We pick sensible defaults for an isolated,
  * user-owned runner and let the user override via env
- * (CUMORA_CLAUDE_ARGS / CUMORA_CODEX_ARGS, space-split). Correctness of the
+ * (CUMORA_CLAUDE_ARGS / CUMORA_CODEX_ARGS / CUMORA_OPENCODE_ARGS /
+ * CUMORA_PI_ARGS / CUMORA_OMP_ARGS / CUMORA_DSH_ARGS, space-split). Correctness of the
  * loop does not depend on the structured output — the agent acts via the
  * `cumora` tool regardless of how we parse stdout.
  */
@@ -66,10 +67,17 @@ function resolveSpawn(bin: string): { command: string; shell: boolean; wantsStdi
   return { command: bin, shell: true, wantsStdinPrompt: true }
 }
 
-export type EngineId = 'claude' | 'codex'
+export type EngineId = 'claude' | 'codex' | 'opencode' | 'pi' | 'omp' | 'dsh'
+
+/** Ledger / triage source for a local engine hop (`byoa-claude`, `byoa-opencode`, …). */
+export type ByoaSource = `byoa-${EngineId}`
+
+export function byoaSource(id: EngineId): ByoaSource {
+  return `byoa-${id}`
+}
 
 /** The pairable engine ids, in the daemon's default detection order. */
-export const ENGINE_IDS: EngineId[] = ['claude', 'codex']
+export const ENGINE_IDS: EngineId[] = ['claude', 'codex', 'opencode', 'pi', 'omp', 'dsh']
 
 export interface EnginePersona {
   id: string
@@ -384,6 +392,45 @@ function failurePreview(args: {
   return detail ? `${prefix}\n${detail}`.slice(0, MAX_FAILURE_CHARS) : prefix
 }
 
+function numField(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) ? v : undefined
+}
+
+/** Map Pi / omp RPC `usage` (`input`/`output`/`cacheRead`/`cacheWrite`) onto EngineUsage. */
+function usageFromPiShape(u: unknown): EngineUsage | undefined {
+  if (!u || typeof u !== 'object') return undefined
+  const o = u as Record<string, unknown>
+  const input = numField(o.input) ?? numField(o.input_tokens)
+  const output = numField(o.output) ?? numField(o.output_tokens)
+  const cacheRead = numField(o.cacheRead) ?? numField(o.cache_read_input_tokens)
+  const cacheWrite = numField(o.cacheWrite) ?? numField(o.cache_creation_input_tokens)
+  if (input == null && output == null && cacheRead == null && cacheWrite == null) return undefined
+  return {
+    input_tokens: input,
+    output_tokens: output,
+    cache_read_input_tokens: cacheRead,
+    cache_creation_input_tokens: cacheWrite,
+  }
+}
+
+/** Map OpenCode `--format json` `part.tokens` onto EngineUsage. */
+function usageFromOpenCodeTokens(t: unknown): EngineUsage | undefined {
+  if (!t || typeof t !== 'object') return undefined
+  const o = t as Record<string, unknown>
+  const cache = o.cache && typeof o.cache === 'object' ? o.cache as Record<string, unknown> : undefined
+  const input = numField(o.input)
+  const output = numField(o.output)
+  const cacheRead = numField(cache?.read) ?? numField(o.cache_read)
+  const cacheWrite = numField(cache?.write) ?? numField(o.cache_write)
+  if (input == null && output == null && cacheRead == null && cacheWrite == null) return undefined
+  return {
+    input_tokens: input,
+    output_tokens: output,
+    cache_read_input_tokens: cacheRead,
+    cache_creation_input_tokens: cacheWrite,
+  }
+}
+
 function spawnEngine(
   bin: string,
   args: string[],
@@ -422,12 +469,23 @@ function spawnEngine(
         // (real pricing). Cheap: only parse stdout JSON objects carrying one.
         if (stream === 'stdout' && cleaned.startsWith('{') && (cleaned.includes('"session_id"') || cleaned.includes('"usage"') || cleaned.includes('"model"'))) {
           try {
-            const obj = JSON.parse(cleaned) as { session_id?: unknown; type?: unknown; usage?: EngineUsage; model?: unknown; message?: { model?: unknown; usage?: EngineUsage; content?: unknown } }
+            const obj = JSON.parse(cleaned) as {
+              session_id?: unknown; sessionID?: unknown; id?: unknown
+              type?: unknown; usage?: unknown; model?: unknown; tokens?: unknown
+              part?: { text?: unknown; tokens?: unknown; model?: unknown }
+              message?: { model?: unknown; usage?: unknown; content?: unknown; role?: unknown }
+            }
             if (typeof obj.session_id === 'string' && obj.session_id) sessionId = obj.session_id
+            if (typeof obj.sessionID === 'string' && obj.sessionID) sessionId = obj.sessionID
+            if (obj.type === 'session' && typeof obj.id === 'string' && obj.id) sessionId = obj.id
             // The terminal `result` event carries the authoritative turn total.
-            if (obj.type === 'result' && obj.usage && typeof obj.usage === 'object') usage = obj.usage
+            if (obj.type === 'result' && obj.usage && typeof obj.usage === 'object') usage = obj.usage as EngineUsage
+            const piU = usageFromPiShape(obj.usage) ?? usageFromPiShape(obj.message?.usage)
+            if (piU) usage = piU
+            const ocU = usageFromOpenCodeTokens(obj.part?.tokens ?? obj.tokens)
+            if (ocU) usage = ocU
             // assistant events carry message.model; some events carry top-level model.
-            const m = typeof obj.message?.model === 'string' ? obj.message.model : (typeof obj.model === 'string' ? obj.model : null)
+            const m = typeof obj.message?.model === 'string' ? obj.message.model : (typeof obj.model === 'string' ? obj.model : (typeof obj.part?.model === 'string' ? obj.part.model : null))
             if (m) model = m
             // Per-hop trajectory mirror of ClaudeSession.onStdout. Same shape,
             // same purpose: one row per outbound model call so even the
@@ -438,12 +496,28 @@ function spawnEngine(
               hopStartedAt = null
               hopIndex += 1
               const { toolUses, textChars } = countAssistantContent(obj.message.content)
-              try { onHopUsage({ model: m, usage: obj.message.usage, latencyMs: startedAt != null ? Date.now() - startedAt : undefined, hopIndex, toolUses, textChars }) }
+              try { onHopUsage({ model: m, usage: obj.message.usage as EngineUsage, latencyMs: startedAt != null ? Date.now() - startedAt : undefined, hopIndex, toolUses, textChars }) }
               catch { /* never break the run on a ledger error */ }
-            } else if (hopStartedAt == null && (obj.type === 'assistant' || obj.type === 'user' || obj.type === 'system')) {
+            } else if (obj.type === 'message_end' && obj.message?.role === 'assistant' && onHopUsage) {
+              const hopUsage = usageFromPiShape(obj.message.usage)
+              const hopModel = typeof obj.message.model === 'string' ? obj.message.model : model
+              if (hopUsage && hopModel) {
+                const startedAt = hopStartedAt
+                hopStartedAt = null
+                hopIndex += 1
+                try { onHopUsage({ model: hopModel, usage: hopUsage, latencyMs: startedAt != null ? Date.now() - startedAt : undefined, hopIndex }) }
+                catch { /* never break the run on a ledger error */ }
+              }
+            } else if ((obj.type === 'step_finish' || obj.type === 'step-finish') && ocU && model && onHopUsage) {
+              const startedAt = hopStartedAt
+              hopStartedAt = null
+              hopIndex += 1
+              try { onHopUsage({ model, usage: ocU, latencyMs: startedAt != null ? Date.now() - startedAt : undefined, hopIndex }) }
+              catch { /* never break the run on a ledger error */ }
+            } else if (hopStartedAt == null && (obj.type === 'assistant' || obj.type === 'user' || obj.type === 'system' || obj.type === 'agent_start' || obj.type === 'step_start' || obj.type === 'text')) {
               hopStartedAt = Date.now()
             }
-            if (obj.type === 'result') { hopStartedAt = null; hopIndex = 0 }
+            if (obj.type === 'result' || obj.type === 'agent_settled') { hopStartedAt = null; hopIndex = 0 }
           } catch { /* partial / non-json line — ignore */ }
         }
         onLog(cleaned)
@@ -508,19 +582,19 @@ function extraArgs(envVar: string): string[] {
   return raw ? raw.split(/\s+/).filter(Boolean) : []
 }
 
-const PERSONA_HEADER = (p: EnginePersona): string =>
+const PERSONA_HEADER = (p: EnginePersona, nativeFile = 'CLAUDE.md'): string =>
   `# ${p.name}${p.role ? ` — ${p.role}` : ''}\n\n` +
   `You are **${p.name}**, a member of a team that collaborates in Cumora (a team chat).\n` +
   `This directory is your private home and your working directory — it persists\n` +
   `across wakes and is yours alone. Its layout:\n` +
-  `- \`CLAUDE.md\` (this file) — always loaded each wake; keep it short.\n` +
+  `- \`${nativeFile}\` (this file) — always loaded each wake; keep it short.\n` +
   `- \`memory/\` — your durable memory. There is NO hidden memory store: to remember\n` +
   `  something across wakes you MUST write it to a file here (e.g. \`memory/<topic>.md\`)\n` +
   `  and add a one-line pointer in \`memory/MEMORY.md\`. Saying "I'll remember" without\n` +
   `  writing a file means you will NOT remember. At the start of each wake, read\n` +
   `  \`memory/MEMORY.md\` (and the files it points to) to recall what you know.\n` +
   `- \`notes/\` — scratch notes and drafts.\n` +
-  `- \`.claude/skills/\` — your skills.\n` +
+  (nativeFile === 'CLAUDE.md' ? `- \`.claude/skills/\` — your skills.\n` : '') +
   `- \`workspace/\` — **put all project files and scratch here**: git clones, builds,\n` +
   `  downloads, temp files. Always \`cd workspace\` (or use \`workspace/…\` paths) for\n` +
   `  that work — do NOT clutter your home root with project files.\n\n` +
@@ -1352,7 +1426,7 @@ class CodexAdapter implements EngineAdapter {
   async seedHome(home: string, persona: EnginePersona): Promise<void> {
     await ensureCommonHome(home)
     const agentsMd = join(home, 'AGENTS.md')
-    if (!(await exists(agentsMd))) await writeFile(agentsMd, PERSONA_HEADER(persona), 'utf8')
+    if (!(await exists(agentsMd))) await writeFile(agentsMd, PERSONA_HEADER(persona, 'AGENTS.md'), 'utf8')
   }
 
   run(args: EngineRunArgs): Promise<EngineRunResult> {
@@ -1386,9 +1460,764 @@ class CodexAdapter implements EngineAdapter {
   }
 }
 
+async function seedAgentsMdHome(home: string, persona: EnginePersona): Promise<void> {
+  await ensureCommonHome(home)
+  const agentsMd = join(home, 'AGENTS.md')
+  if (!(await exists(agentsMd))) await writeFile(agentsMd, PERSONA_HEADER(persona, 'AGENTS.md'), 'utf8')
+}
+
+/** Pull assistant text out of OpenCode `--format json` NDJSON (type=text events). */
+function unwrapOpenCodeText(raw: string): { text: string; usage?: EngineUsage } {
+  const texts: string[] = []
+  let usage: EngineUsage | undefined
+  for (const line of raw.split('\n')) {
+    const t = line.trim()
+    if (!t.startsWith('{')) continue
+    try {
+      const obj = JSON.parse(t) as { type?: unknown; text?: unknown; part?: { text?: unknown; tokens?: unknown }; tokens?: unknown }
+      if (obj.type === 'text') {
+        const piece = typeof obj.part?.text === 'string' ? obj.part.text : (typeof obj.text === 'string' ? obj.text : '')
+        if (piece) texts.push(piece)
+      }
+      const u = usageFromOpenCodeTokens(obj.part?.tokens ?? obj.tokens)
+      if (u) usage = u
+    } catch { /* ignore */ }
+  }
+  return { text: texts.join('\n').trim(), usage }
+}
+
+/** Pull the last assistant message text out of Pi/omp `--mode json` NDJSON. */
+function unwrapPiAssistantText(raw: string): { text: string; usage?: EngineUsage; model?: string | null } {
+  let text = ''
+  let usage: EngineUsage | undefined
+  let model: string | null = null
+  for (const line of raw.split('\n')) {
+    const t = line.trim()
+    if (!t.startsWith('{')) continue
+    try {
+      const obj = JSON.parse(t) as { type?: unknown; usage?: unknown; message?: { role?: unknown; model?: unknown; usage?: unknown; content?: unknown } }
+      if (obj.type === 'message_end' && obj.message?.role === 'assistant') {
+        const content = obj.message.content
+        const bits: string[] = []
+        if (typeof content === 'string') bits.push(content)
+        else if (Array.isArray(content)) {
+          for (const item of content) {
+            if (item && typeof item === 'object' && (item as { type?: unknown }).type === 'text' && typeof (item as { text?: unknown }).text === 'string') {
+              bits.push((item as { text: string }).text)
+            }
+          }
+        }
+        if (bits.length) text = bits.join('')
+        const u = usageFromPiShape(obj.message.usage)
+        if (u) usage = u
+        if (typeof obj.message.model === 'string') model = obj.message.model
+      }
+      const live = usageFromPiShape(obj.usage)
+      if (live) usage = live
+    } catch { /* ignore */ }
+  }
+  return { text: text.trim(), usage, model }
+}
+
+function classifyFromJsonl(res: EngineClassifyResult, unwrap: (raw: string) => { text: string; usage?: EngineUsage }): EngineClassifyResult {
+  if (res.error) return res
+  const parsed = unwrap(res.text)
+  if (parsed.text) return { text: parsed.text, usage: parsed.usage }
+  // Probe/classify still succeed when the engine emitted JSON events but no
+  // assistant text (some OpenCode versions race idle vs text). A live binary
+  // that exited 0 is enough for doctor; triage will fail-open/closed on parse.
+  if (res.text.includes('"type"')) return { text: parsed.text || 'OK', usage: parsed.usage }
+  return res
+}
+
+type AcpRpcMsg = {
+  jsonrpc?: string
+  id?: number
+  method?: string
+  result?: {
+    sessionId?: unknown
+    stopReason?: unknown
+    protocolVersion?: unknown
+  }
+  error?: { message?: unknown; code?: unknown }
+  params?: {
+    sessionId?: unknown
+    options?: Array<{ optionId?: unknown; kind?: unknown }>
+    update?: { sessionUpdate?: unknown; content?: { type?: unknown; text?: unknown } }
+  }
+}
+
+/**
+ * Persistent OpenCode session over ACP (`opencode acp --cwd <home>`).
+ * JSON-RPC 2.0 nd-JSON on stdin/stdout: initialize → session/new (or load) →
+ * session/prompt per wake. Tool permissions are auto-allowed (isolated home).
+ * ACP has no mid-turn steer; queued steer is sent as the next session/prompt
+ * before send() resolves. Custom-args fall back to one-shot `run()`.
+ */
+class OpenCodeAcpSession implements EngineSession {
+  private readonly child: ChildProcess
+  private readonly onLog: (line: string) => void
+  private readonly home: string
+  private outBuf = ''
+  private sid: string | null
+  private exited = false
+  private exitCode = 0
+  private reqId = 0
+  private initializeId: number | null = null
+  private sessionReqId: number | null = null
+  private promptId: number | null = null
+  private loadingResume = false
+  private ready = false
+  private pending: { resolve: (r: EngineRunResult) => void } | null = null
+  private queuedPrompt: string | null = null
+  private steerQueue: string[] = []
+  private readonly model: string | null
+  readonly carriesStandingPrompt = false
+
+  constructor(bin: string, spawnArgs: string[], home: string, env: NodeJS.ProcessEnv, opts: EngineSessionArgs) {
+    this.onLog = opts.onLog
+    this.home = home
+    this.sid = opts.resumeSessionId ?? null
+    this.model = opts.model ?? null
+    const { command, shell } = resolveSpawn(bin)
+    this.child = spawn(command, spawnArgs, { cwd: home, env, stdio: ['pipe', 'pipe', 'pipe'], shell })
+    this.child.stdout?.on('data', (b: Buffer) => this.onStdout(b))
+    this.child.stderr?.on('data', (b: Buffer) => { for (const raw of b.toString('utf8').split('\n')) { const l = cleanLine(raw); if (l) this.onLog(l) } })
+    this.child.on('error', (err) => this.die(1, err.message))
+    this.child.on('close', (code, sig) => this.die(code ?? (sig ? 128 : 1), sig ? `terminated by ${sig}` : `exited with code ${code}`))
+    queueMicrotask(() => {
+      this.initializeId = this.req('initialize', {
+        protocolVersion: 1,
+        clientInfo: { name: 'cumora-daemon', version: '1.0.0' },
+        clientCapabilities: {},
+      })
+    })
+  }
+
+  get alive(): boolean { return !this.exited && this.child.stdin?.writable === true }
+  get sessionId(): string | null { return this.sid }
+
+  send(prompt: string): Promise<EngineRunResult> {
+    if (this.pending) return Promise.resolve({ exitCode: 1, error: 'engine session busy — a turn is already in flight', sessionId: this.sid })
+    if (!this.alive) return Promise.resolve({ exitCode: this.exitCode || 1, error: 'engine session is not alive (process gone)', sessionId: this.sid })
+    return new Promise<EngineRunResult>((resolve) => {
+      this.pending = { resolve }
+      if (this.ready && this.sid) this.startPrompt(prompt)
+      else this.queuedPrompt = prompt
+    })
+  }
+
+  steer(text: string): void {
+    if (this.pending && this.alive && text.trim()) this.steerQueue.push(text)
+  }
+
+  stop(): void {
+    this.exited = true
+    if (this.sid) this.notify('session/cancel', { sessionId: this.sid })
+    try { this.child.stdin?.end() } catch { /* ignore */ }
+    try { this.child.kill('SIGTERM') } catch { /* ignore */ }
+  }
+
+  private nextId(): number { this.reqId += 1; return this.reqId }
+  private req(method: string, params: Record<string, unknown>): number {
+    const id = this.nextId()
+    try { this.child.stdin?.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n') } catch { /* die() handles */ }
+    return id
+  }
+  private notify(method: string, params: Record<string, unknown>): void {
+    try { this.child.stdin?.write(JSON.stringify({ jsonrpc: '2.0', method, params }) + '\n') } catch { /* die() handles */ }
+  }
+  private reply(id: number, result: unknown): void {
+    try { this.child.stdin?.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n') } catch { /* die() handles */ }
+  }
+  private startPrompt(prompt: string): void {
+    if (!this.sid) return
+    this.promptId = this.req('session/prompt', {
+      sessionId: this.sid,
+      prompt: [{ type: 'text', text: stripLoneSurrogates(prompt) }],
+    })
+  }
+  private openSession(): void {
+    if (this.sid) {
+      this.loadingResume = true
+      this.sessionReqId = this.req('session/load', { sessionId: this.sid, cwd: this.home, mcpServers: [] })
+    } else {
+      this.sessionReqId = this.req('session/new', { cwd: this.home, mcpServers: [] })
+    }
+  }
+
+  private onStdout(buf: Buffer): void {
+    this.outBuf += buf.toString('utf8')
+    let nl: number
+    while ((nl = this.outBuf.indexOf('\n')) >= 0) {
+      const line = this.outBuf.slice(0, nl)
+      this.outBuf = this.outBuf.slice(nl + 1)
+      const t = line.trim()
+      if (!t.startsWith('{')) { const c = cleanLine(line); if (c) this.onLog(c); continue }
+      let msg: AcpRpcMsg | null = null
+      try { msg = JSON.parse(t) as AcpRpcMsg } catch { msg = null }
+      if (!msg) { const c = cleanLine(line); if (c) this.onLog(c); continue }
+      this.handle(msg)
+    }
+  }
+
+  private handle(msg: AcpRpcMsg): void {
+    // Auto-approve tool permission requests — this home is isolated + user-owned.
+    if (msg.method === 'session/request_permission' && msg.id !== undefined) {
+      const options = msg.params?.options ?? []
+      const pick = options.find((o) => o.kind === 'allow_always' || o.optionId === 'always' || o.optionId === 'allow_always')
+        ?? options.find((o) => o.kind === 'allow_once' || o.optionId === 'once' || o.optionId === 'allow_once')
+        ?? options[0]
+      const optionId = typeof pick?.optionId === 'string' ? pick.optionId : 'allow_once'
+      this.reply(msg.id, { outcome: { outcome: 'selected', optionId } })
+      return
+    }
+    if (msg.method === 'session/update') {
+      const upd = msg.params?.update
+      const text = upd?.content?.type === 'text' && typeof upd.content.text === 'string' ? upd.content.text : ''
+      if (text.trim()) this.onLog(`[opencode] ${text.replace(/\s+/g, ' ').slice(0, 200)}`)
+      return
+    }
+    if (msg.id !== undefined && msg.id === this.initializeId) {
+      this.initializeId = null
+      if (msg.error) { this.failPending(String(msg.error.message || 'opencode acp initialize failed')); return }
+      this.openSession()
+      return
+    }
+    if (msg.id !== undefined && msg.id === this.sessionReqId) {
+      this.sessionReqId = null
+      if (msg.error) {
+        if (this.loadingResume) {
+          this.onLog(`[opencode] session/load failed (${String(msg.error.message || '')}) — starting a fresh session`)
+          this.loadingResume = false
+          this.sid = null
+          this.sessionReqId = this.req('session/new', { cwd: this.home, mcpServers: [] })
+          return
+        }
+        this.failPending(String(msg.error.message || 'opencode session/new failed'))
+        return
+      }
+      const sid = typeof msg.result?.sessionId === 'string' ? msg.result.sessionId : this.sid
+      if (typeof sid === 'string' && sid) this.sid = sid
+      this.ready = true
+      if (this.queuedPrompt && this.pending) { const p = this.queuedPrompt; this.queuedPrompt = null; this.startPrompt(p) }
+      return
+    }
+    if (msg.id !== undefined && msg.id === this.promptId) {
+      this.promptId = null
+      if (msg.error) { this.settle(String(msg.error.message || 'opencode session/prompt failed')); return }
+      const stop = typeof msg.result?.stopReason === 'string' ? msg.result.stopReason : ''
+      const failed = stop === 'refusal' ? 'opencode refused the turn' : undefined
+      const next = this.steerQueue.shift()
+      if (next && this.alive && this.pending) { this.startPrompt(next); return }
+      this.settle(failed)
+    }
+  }
+
+  private settle(error?: string): void {
+    const p = this.pending
+    this.pending = null
+    this.steerQueue = []
+    if (p) p.resolve({ exitCode: error ? 1 : 0, error, sessionId: this.sid, model: this.model })
+  }
+  private failPending(error: string): void {
+    if (this.pending) this.settle(error)
+    else this.onLog(`[opencode] ${error}`)
+  }
+  private die(code: number, why: string): void {
+    const alreadyDown = this.exited
+    this.exited = true
+    this.exitCode = code
+    if (!alreadyDown) {
+      this.onLog(`[session] engine process died ${this.pending ? 'MID-TURN' : 'while idle'}: ${why} (exit ${code})`)
+    }
+    const p = this.pending
+    this.pending = null
+    if (p) p.resolve({ exitCode: code, error: why, sessionId: this.sid })
+  }
+}
+
+class OpenCodeAdapter implements EngineAdapter {
+  readonly id = 'opencode' as const
+  readonly bin = 'opencode'
+
+  async classify(args: EngineClassifyArgs): Promise<EngineClassifyResult> {
+    const flags = extraArgs('CUMORA_TRIAGE_ARGS')
+    const { command, shell, wantsStdinPrompt } = resolveSpawn(this.bin)
+    const model = args.model ? ['--model', args.model] : []
+    const base = flags.length ? ['run', ...flags] : ['run', '--auto', '--format', 'json', ...model]
+    const argv = wantsStdinPrompt ? base : [...base, args.prompt]
+    const res = await spawnCapture(command, argv, {
+      cwd: args.cwd, env: args.env, signal: args.signal, onLog: args.onLog, shell,
+      stdinText: wantsStdinPrompt ? args.prompt : undefined,
+    })
+    return classifyFromJsonl(res, unwrapOpenCodeText)
+  }
+
+  probe(args: EngineProbeArgs): Promise<EngineClassifyResult> {
+    const { command, shell, wantsStdinPrompt } = resolveSpawn(this.bin)
+    const base = ['run', '--auto', '--format', 'json']
+    const argv = wantsStdinPrompt ? base : [...base, DOCTOR_PROMPT]
+    return spawnCapture(command, argv, {
+      cwd: args.cwd, env: args.env, signal: args.signal, shell,
+      stdinText: wantsStdinPrompt ? DOCTOR_PROMPT : undefined,
+    }).then((res) => classifyFromJsonl(res, unwrapOpenCodeText))
+  }
+
+  async probeWake(args: EngineWakeProbeArgs): Promise<EngineWakeProbeResult> {
+    if (extraArgs('CUMORA_OPENCODE_ARGS').length) return { ok: true, detail: '', skipped: true }
+    const { command, shell } = resolveSpawn(this.bin)
+    return new Promise<EngineWakeProbeResult>((resolve) => {
+      let settled = false
+      const finish = (r: EngineWakeProbeResult) => {
+        if (settled) return
+        settled = true
+        try { child.stdin?.end() } catch { /* ignore */ }
+        try { child.kill('SIGTERM') } catch { /* ignore */ }
+        resolve(r)
+      }
+      const child = spawn(command, ['acp', '--cwd', args.cwd], {
+        cwd: args.cwd, env: args.env, stdio: ['pipe', 'pipe', 'pipe'], shell,
+      })
+      const onAbort = () => finish({ ok: false, detail: 'aborted (timeout)' })
+      if (args.signal.aborted) { onAbort(); return }
+      args.signal.addEventListener('abort', onAbort, { once: true })
+      let buf = ''
+      let stderrTail = ''
+      const initId = 1
+      const newSessionId = 2
+      let initialized = false
+      const writeRpc = (msg: object) => {
+        try { child.stdin?.write(JSON.stringify(msg) + '\n') } catch { /* die path handles */ }
+      }
+      writeRpc({
+        jsonrpc: '2.0', id: initId, method: 'initialize',
+        params: { protocolVersion: 1, clientInfo: { name: 'cumora-doctor', version: '1.0.0' }, clientCapabilities: {} },
+      })
+      child.stdout?.on('data', (b: Buffer) => {
+        buf += b.toString('utf8')
+        for (;;) {
+          const nl = buf.indexOf('\n')
+          if (nl < 0) break
+          const line = buf.slice(0, nl).trim()
+          buf = buf.slice(nl + 1)
+          if (!line) continue
+          let msg: AcpRpcMsg
+          try { msg = JSON.parse(line) as AcpRpcMsg } catch { continue }
+          if (msg.error?.message && msg.id === initId) {
+            finish({ ok: false, detail: `acp rejected initialize: ${String(msg.error.message).slice(0, 240)}` })
+            return
+          }
+          if (!initialized && msg.id === initId && msg.result) {
+            initialized = true
+            writeRpc({ jsonrpc: '2.0', id: newSessionId, method: 'session/new', params: { cwd: args.cwd, mcpServers: [] } })
+            continue
+          }
+          if (initialized && msg.id === newSessionId) {
+            if (msg.error?.message) {
+              finish({ ok: false, detail: `acp session/new failed: ${String(msg.error.message).slice(0, 240)}` })
+              return
+            }
+            finish({ ok: true, detail: '' })
+            return
+          }
+        }
+      })
+      child.stderr?.on('data', (b: Buffer) => {
+        const tail = stderrTail + b.toString('utf8')
+        stderrTail = tail.length > 2000 ? tail.slice(-2000) : tail
+      })
+      child.on('error', (err) => finish({ ok: false, detail: `spawn error: ${err.message}` }))
+      child.on('close', (code, sig) => {
+        if (settled) return
+        const stage = !initialized ? 'before initialize ack' : 'before session/new ack'
+        const exit = sig ? `terminated by ${sig}` : `exit ${code}`
+        finish({ ok: false, detail: `acp died ${stage} (${exit}): ${salientError(stderrTail) || 'no stderr'}` })
+      })
+    })
+  }
+
+  seedHome(home: string, persona: EnginePersona): Promise<void> {
+    return seedAgentsMdHome(home, persona)
+  }
+
+  run(args: EngineRunArgs): Promise<EngineRunResult> {
+    const flags = extraArgs('CUMORA_OPENCODE_ARGS')
+    const model = args.model ? ['--model', args.model] : []
+    const resume = args.resumeSessionId ? ['--session', args.resumeSessionId] : []
+    const { command, shell, wantsStdinPrompt } = resolveSpawn(this.bin)
+    const base = flags.length
+      ? ['run', ...flags, ...resume]
+      : ['run', '--auto', '--format', 'json', '--dir', args.home, ...resume, ...model]
+    const argv = wantsStdinPrompt ? base : [...base, args.prompt]
+    return spawnEngine(command, argv, args, { shell, stdinText: wantsStdinPrompt ? args.prompt : undefined })
+  }
+
+  startSession(args: EngineSessionArgs): EngineSession | null {
+    if (extraArgs('CUMORA_OPENCODE_ARGS').length) return null
+    const acpArgs = ['acp', '--cwd', args.home]
+    return new OpenCodeAcpSession(this.bin, acpArgs, args.home, args.env, args)
+  }
+}
+
+/**
+ * Shared Pi / omp RPC session. JSONL over stdin/stdout; split on `\n` only
+ * (never Node readline — U+2028/U+2029 are valid inside JSON strings).
+ * A turn is done on `agent_settled` (not `agent_end`, which can be followed
+ * by retry/compaction). Steer uses `{type:"steer"}`; stop kills the process
+ * after an optional `{type:"abort"}`.
+ */
+class JsonlRpcSession implements EngineSession {
+  private readonly child: ChildProcess
+  private readonly onLog: (line: string) => void
+  private readonly onHopUsage?: (r: EngineHopReport) => void
+  private readonly label: string
+  private outBuf = ''
+  private sid: string | null = null
+  private exited = false
+  private exitCode = 0
+  private ready = false
+  private streaming = false
+  private pending: { resolve: (r: EngineRunResult) => void } | null = null
+  private queuedPrompt: string | null = null
+  private turnStartedAt: number | null = null
+  private hopIndex = 0
+  private curModel: string | null
+  private lastUsage: EngineUsage | undefined
+  private pendingTimer: ReturnType<typeof setTimeout> | null = null
+  readonly carriesStandingPrompt = false
+
+  constructor(label: string, bin: string, spawnArgs: string[], opts: EngineSessionArgs) {
+    this.label = label
+    this.onLog = opts.onLog
+    this.onHopUsage = opts.onHopUsage
+    this.curModel = opts.model ?? null
+    const { command, shell } = resolveSpawn(bin)
+    this.child = spawn(command, spawnArgs, { cwd: opts.home, env: opts.env, stdio: ['pipe', 'pipe', 'pipe'], shell })
+    this.child.stdout?.on('data', (b: Buffer) => this.onStdout(b))
+    this.child.stderr?.on('data', (b: Buffer) => {
+      for (const raw of b.toString('utf8').split('\n')) {
+        const l = cleanLine(raw)
+        if (l) this.onLog(l)
+      }
+    })
+    this.child.on('error', (err) => this.die(1, err.message))
+    this.child.on('close', (code, sig) => this.die(code ?? (sig ? 128 : 1), sig ? `terminated by ${sig}` : `exited with code ${code}`))
+  }
+
+  get alive(): boolean { return !this.exited && this.child.stdin?.writable === true }
+  get sessionId(): string | null { return this.sid }
+
+  send(prompt: string): Promise<EngineRunResult> {
+    if (this.pending) return Promise.resolve({ exitCode: 1, error: 'engine session busy — a turn is already in flight', sessionId: this.sid })
+    if (!this.alive) return Promise.resolve({ exitCode: this.exitCode || 1, error: 'engine session is not alive (process gone)', sessionId: this.sid })
+    return new Promise<EngineRunResult>((resolve) => {
+      this.pending = { resolve }
+      if (TURN_TIMEOUT_MS > 0) {
+        this.pendingTimer = setTimeout(() => {
+          this.settle({ exitCode: 124, error: `engine turn exceeded CUMORA_TURN_TIMEOUT_MS (${Math.round(TURN_TIMEOUT_MS / 1000)}s) — aborted; session will respawn`, sessionId: this.sid })
+          this.stop()
+        }, TURN_TIMEOUT_MS)
+        this.pendingTimer.unref?.()
+      }
+      if (this.ready) this.writePrompt(prompt)
+      else this.queuedPrompt = prompt
+    })
+  }
+
+  steer(text: string): void {
+    if (!this.pending || !this.alive || !text.trim()) return
+    this.write({ type: 'steer', message: stripLoneSurrogates(text) })
+  }
+
+  stop(): void {
+    this.exited = true
+    this.write({ type: 'abort' })
+    try { this.child.stdin?.end() } catch { /* ignore */ }
+    try { this.child.kill('SIGTERM') } catch { /* ignore */ }
+  }
+
+  private write(obj: Record<string, unknown>): void {
+    try { this.child.stdin?.write(JSON.stringify(obj) + '\n') } catch { /* die() handles */ }
+  }
+  private writePrompt(prompt: string): void {
+    this.turnStartedAt = Date.now()
+    this.hopIndex = 0
+    this.lastUsage = undefined
+    const msg: Record<string, unknown> = { type: 'prompt', message: stripLoneSurrogates(prompt) }
+    if (this.streaming) msg.streamingBehavior = 'steer'
+    this.write(msg)
+  }
+
+  private onStdout(buf: Buffer): void {
+    this.outBuf += buf.toString('utf8')
+    let nl: number
+    while ((nl = this.outBuf.indexOf('\n')) >= 0) {
+      const line = this.outBuf.slice(0, nl)
+      this.outBuf = this.outBuf.slice(nl + 1)
+      const t = line.endsWith('\r') ? line.slice(0, -1) : line
+      const trimmed = t.trim()
+      if (!trimmed) continue
+      if (!trimmed.startsWith('{')) { const c = cleanLine(t); if (c) this.onLog(c); continue }
+      let ev: {
+        type?: unknown; id?: unknown; success?: unknown; command?: unknown
+        message?: { role?: unknown; model?: unknown; usage?: unknown }
+        usage?: unknown; error?: unknown
+      }
+      try { ev = JSON.parse(trimmed) } catch { const c = cleanLine(t); if (c) this.onLog(c); continue }
+      this.handle(ev)
+    }
+  }
+
+  private handle(ev: {
+    type?: unknown; id?: unknown; success?: unknown; command?: unknown
+    message?: { role?: unknown; model?: unknown; usage?: unknown }
+    usage?: unknown; error?: unknown
+  }): void {
+    const ty = ev.type
+    if (ty === 'ready') {
+      this.ready = true
+      if (this.queuedPrompt && this.pending) { const p = this.queuedPrompt; this.queuedPrompt = null; this.writePrompt(p) }
+      return
+    }
+    if (ty === 'session' && typeof ev.id === 'string') this.sid = ev.id
+    if (ty === 'agent_start') this.streaming = true
+    if (typeof ev.message?.model === 'string') this.curModel = ev.message.model
+    const live = usageFromPiShape(ev.usage) ?? usageFromPiShape(ev.message?.usage)
+    if (live) this.lastUsage = live
+    if (ty === 'message_end' && ev.message?.role === 'assistant' && this.onHopUsage) {
+      const hopUsage = usageFromPiShape(ev.message.usage) ?? this.lastUsage
+      const hopModel = typeof ev.message.model === 'string' ? ev.message.model : this.curModel
+      if (hopUsage && hopModel) {
+        this.hopIndex += 1
+        try {
+          this.onHopUsage({
+            model: hopModel,
+            usage: hopUsage,
+            latencyMs: this.turnStartedAt != null ? Date.now() - this.turnStartedAt : undefined,
+            hopIndex: this.hopIndex,
+          })
+        } catch { /* ledger best-effort */ }
+      }
+    }
+    if (ty === 'response' && ev.success === false && ev.command === 'prompt' && this.pending) {
+      this.settle({ exitCode: 1, error: `${this.label} prompt rejected: ${String(ev.error || 'see log')}`, sessionId: this.sid })
+      return
+    }
+    if (ty === 'agent_settled') {
+      this.streaming = false
+      this.settle({
+        exitCode: 0,
+        sessionId: this.sid,
+        usage: this.lastUsage,
+        model: this.curModel,
+      })
+      return
+    }
+    const c = cleanLine(JSON.stringify(ev).slice(0, 300))
+    if (c && (ty === 'tool_execution_start' || ty === 'error' || ty === 'extension_error')) this.onLog(`[${this.label}] ${c}`)
+  }
+
+  private settle(r: EngineRunResult): void {
+    if (this.pendingTimer) { clearTimeout(this.pendingTimer); this.pendingTimer = null }
+    const p = this.pending
+    this.pending = null
+    this.turnStartedAt = null
+    if (p) p.resolve(r)
+  }
+  private die(code: number, why: string): void {
+    const alreadyDown = this.exited
+    this.exited = true
+    this.exitCode = code
+    if (!alreadyDown) {
+      this.onLog(`[session] engine process died ${this.pending ? 'MID-TURN' : 'while idle'}: ${why} (exit ${code})`)
+    }
+    if (this.pending) {
+      this.settle({ exitCode: code, error: why, sessionId: this.sid })
+    }
+  }
+}
+
+class PiFamilyAdapter implements EngineAdapter {
+  constructor(
+    readonly id: 'pi' | 'omp',
+    readonly bin: string,
+    private readonly argsEnv: string,
+  ) {}
+
+  async classify(args: EngineClassifyArgs): Promise<EngineClassifyResult> {
+    const flags = extraArgs('CUMORA_TRIAGE_ARGS')
+    const { command, shell, wantsStdinPrompt } = resolveSpawn(this.bin)
+    const model = args.model ? ['--model', args.model] : []
+    const base = flags.length
+      ? [...flags]
+      : ['-p', '--mode', 'json', '--no-session', ...this.approveFlags(), ...model]
+    const argv = wantsStdinPrompt ? base : (base.includes('-p') ? this.withPrompt(base, args.prompt) : [...base, args.prompt])
+    const res = await spawnCapture(command, argv, {
+      cwd: args.cwd, env: args.env, signal: args.signal, onLog: args.onLog, shell,
+      stdinText: wantsStdinPrompt ? args.prompt : undefined,
+    })
+    return classifyFromJsonl(res, (raw) => unwrapPiAssistantText(raw))
+  }
+
+  probe(args: EngineProbeArgs): Promise<EngineClassifyResult> {
+    const { command, shell, wantsStdinPrompt } = resolveSpawn(this.bin)
+    const base = ['-p', '--mode', 'json', '--no-session', ...this.approveFlags()]
+    const argv = wantsStdinPrompt ? base : this.withPrompt(base, DOCTOR_PROMPT)
+    return spawnCapture(command, argv, {
+      cwd: args.cwd, env: args.env, signal: args.signal, shell,
+      stdinText: wantsStdinPrompt ? DOCTOR_PROMPT : undefined,
+    }).then((res) => classifyFromJsonl(res, (raw) => unwrapPiAssistantText(raw)))
+  }
+
+  async probeWake(args: EngineWakeProbeArgs): Promise<EngineWakeProbeResult> {
+    if (extraArgs(this.argsEnv).length) return { ok: true, detail: '', skipped: true }
+    const { command, shell } = resolveSpawn(this.bin)
+    return new Promise<EngineWakeProbeResult>((resolve) => {
+      let settled = false
+      const finish = (r: EngineWakeProbeResult) => {
+        if (settled) return
+        settled = true
+        try { child.stdin?.end() } catch { /* ignore */ }
+        try { child.kill('SIGTERM') } catch { /* ignore */ }
+        resolve(r)
+      }
+      const child = spawn(command, ['--mode', 'rpc', '--no-session', ...this.approveFlags()], {
+        cwd: args.cwd, env: args.env, stdio: ['pipe', 'pipe', 'pipe'], shell,
+      })
+      const onAbort = () => finish({ ok: false, detail: 'aborted (timeout)' })
+      if (args.signal.aborted) { onAbort(); return }
+      args.signal.addEventListener('abort', onAbort, { once: true })
+      let buf = ''
+      let stderrTail = ''
+      child.stdout?.on('data', (b: Buffer) => {
+        buf += b.toString('utf8')
+        for (;;) {
+          const nl = buf.indexOf('\n')
+          if (nl < 0) break
+          const line = buf.slice(0, nl).trim()
+          buf = buf.slice(nl + 1)
+          if (!line.startsWith('{')) continue
+          try {
+            const ev = JSON.parse(line) as { type?: unknown }
+            if (ev.type === 'ready') { finish({ ok: true, detail: '' }); return }
+          } catch { /* ignore */ }
+        }
+      })
+      child.stderr?.on('data', (b: Buffer) => {
+        const tail = stderrTail + b.toString('utf8')
+        stderrTail = tail.length > 2000 ? tail.slice(-2000) : tail
+      })
+      child.on('error', (err) => finish({ ok: false, detail: `spawn error: ${err.message}` }))
+      child.on('close', (code, sig) => {
+        if (settled) return
+        const exit = sig ? `terminated by ${sig}` : `exit ${code}`
+        finish({ ok: false, detail: `${this.bin} rpc died before ready (${exit}): ${salientError(stderrTail) || 'no stderr'}` })
+      })
+    })
+  }
+
+  seedHome(home: string, persona: EnginePersona): Promise<void> {
+    return seedAgentsMdHome(home, persona)
+  }
+
+  run(args: EngineRunArgs): Promise<EngineRunResult> {
+    const flags = extraArgs(this.argsEnv)
+    const model = args.model ? ['--model', args.model] : []
+    const { command, shell, wantsStdinPrompt } = resolveSpawn(this.bin)
+    const base = flags.length
+      ? ['-p', ...flags]
+      : ['-p', '--mode', 'json', '--no-session', ...this.approveFlags(), ...model]
+    const argv = wantsStdinPrompt ? base : this.withPrompt(base, args.prompt)
+    return spawnEngine(command, argv, args, { shell, stdinText: wantsStdinPrompt ? args.prompt : undefined })
+  }
+
+  startSession(args: EngineSessionArgs): EngineSession | null {
+    if (extraArgs(this.argsEnv).length) return null
+    const spawnArgs = ['--mode', 'rpc', ...this.approveFlags()]
+    if (args.model) spawnArgs.push('--model', args.model)
+    return new JsonlRpcSession(this.id, this.bin, spawnArgs, args)
+  }
+
+  private approveFlags(): string[] {
+    // Pi documents `--approve` for non-interactive trust. omp is a Pi fork and
+    // accepts the same flag; if a version rejects it, CUMORA_*_ARGS overrides
+    // the one-shot path (and disables persistent mode).
+    return ['--approve']
+  }
+
+  private withPrompt(base: string[], prompt: string): string[] {
+    const i = base.indexOf('-p')
+    if (i >= 0) {
+      const out = base.slice()
+      out.splice(i + 1, 0, prompt)
+      return out
+    }
+    return [...base, prompt]
+  }
+}
+
+class DshAdapter implements EngineAdapter {
+  readonly id = 'dsh' as const
+  readonly bin = 'dsh'
+
+  classify(args: EngineClassifyArgs): Promise<EngineClassifyResult> {
+    const flags = extraArgs('CUMORA_TRIAGE_ARGS')
+    const { command, shell, wantsStdinPrompt } = resolveSpawn(this.bin)
+    const base = flags.length ? flags : ['--profile', 'headless']
+    const argv = wantsStdinPrompt ? base : [...base, args.prompt]
+    return spawnCapture(command, argv, {
+      cwd: args.cwd, env: args.env, signal: args.signal, onLog: args.onLog, shell,
+      stdinText: wantsStdinPrompt ? args.prompt : undefined,
+    })
+  }
+
+  probe(args: EngineProbeArgs): Promise<EngineClassifyResult> {
+    const { command, shell, wantsStdinPrompt } = resolveSpawn(this.bin)
+    const base = ['--profile', 'headless']
+    const argv = wantsStdinPrompt ? base : [...base, DOCTOR_PROMPT]
+    return spawnCapture(command, argv, {
+      cwd: args.cwd, env: args.env, signal: args.signal, shell,
+      stdinText: wantsStdinPrompt ? DOCTOR_PROMPT : undefined,
+    })
+  }
+
+  probeWake(_args: EngineWakeProbeArgs): Promise<EngineWakeProbeResult> {
+    // No distinct wake path: startSession() is null, so the real wake is the
+    // same one-shot `dsh --profile headless` that probe() already covers.
+    return Promise.resolve({ ok: true, detail: '', skipped: true })
+  }
+
+  seedHome(home: string, persona: EnginePersona): Promise<void> {
+    return seedAgentsMdHome(home, persona)
+  }
+
+  run(args: EngineRunArgs): Promise<EngineRunResult> {
+    // Headless one-shot is the documented non-TUI path (`dsh --profile headless "<prompt>"`).
+    // Upstream has no stable stdio RPC for the CLI; persistence is session files on disk,
+    // not a long-lived process we can send/steer. startSession returns null.
+    const flags = extraArgs('CUMORA_DSH_ARGS')
+    const { command, shell, wantsStdinPrompt } = resolveSpawn(this.bin)
+    const base = flags.length ? flags : ['--profile', 'headless']
+    const argv = wantsStdinPrompt ? base : [...base, args.prompt]
+    return spawnEngine(command, argv, args, { shell, stdinText: wantsStdinPrompt ? args.prompt : undefined })
+  }
+
+  startSession(_args: EngineSessionArgs): EngineSession | null {
+    // dsh CLI has no durable stdio RPC comparable to Claude stream-json / Codex
+    // app-server / Pi `--mode rpc`. The Python SDK wraps a separate jsonrpc
+    // runtime binary, not `dsh` itself. Daemon falls back to one-shot run() per wake.
+    return null
+  }
+}
+
 const ADAPTERS: Record<EngineId, EngineAdapter> = {
   claude: new ClaudeAdapter(),
   codex: new CodexAdapter(),
+  opencode: new OpenCodeAdapter(),
+  pi: new PiFamilyAdapter('pi', 'pi', 'CUMORA_PI_ARGS'),
+  omp: new PiFamilyAdapter('omp', 'omp', 'CUMORA_OMP_ARGS'),
+  dsh: new DshAdapter(),
 }
 
 export function getAdapter(id: EngineId): EngineAdapter {
@@ -1397,7 +2226,7 @@ export function getAdapter(id: EngineId): EngineAdapter {
 
 /** Probe which engines are installed on this machine. */
 export async function detectEngines(): Promise<EngineId[]> {
-  const ids = Object.keys(ADAPTERS) as EngineId[]
+  const ids = ENGINE_IDS
   const present = await Promise.all(ids.map(async (id) => ((await binOnPath(ADAPTERS[id].bin)) ? id : null)))
   return present.filter((x): x is EngineId => x !== null)
 }
@@ -1473,7 +2302,7 @@ export async function runEngineDoctor(opts?: {
   const env = opts?.env ?? process.env
   const timeoutMs = opts?.timeoutMs ?? 60_000
   const cwd = await mkdtemp(join(tmpdir(), 'cumora-doctor-'))
-  const ids = Object.keys(ADAPTERS) as EngineId[]
+  const ids = ENGINE_IDS
   return Promise.all(ids.map(async (id): Promise<EngineHealth> => {
     const adapter = ADAPTERS[id]
     const path = await resolveBinPath(adapter.bin)

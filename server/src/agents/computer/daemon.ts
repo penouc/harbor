@@ -2,8 +2,8 @@
  * `cumora agent computer` — the BYOA daemon.
  *
  * A long-running process on the user's machine (laptop or VPS) that hosts one
- * or more of their Cumora agents, using a local engine (Claude Code / Codex)
- * as each agent's brain. See docs/BYOA.md.
+ * or more of their Cumora agents, using a local engine (Claude Code, Codex,
+ * OpenCode, Pi, omp, or dsh) as each agent's brain. See docs/BYOA.md.
  *
  * It talks to the Cumora server only over HTTP — no DB/Redis — so it can run
  * anywhere:
@@ -27,7 +27,7 @@ import { promisify } from 'node:util'
 
 const execFileP = promisify(execFile)
 import { parseSseStream } from '../runtime/sse-parse.js'
-import { detectEngines, getAdapter, ENGINE_IDS, runEngineDoctor, type EngineId, type EngineSession, type EngineRunResult, type EngineUsage, type EngineHopReport } from './engine.js'
+import { detectEngines, getAdapter, ENGINE_IDS, runEngineDoctor, byoaSource, type EngineId, type EngineSession, type EngineRunResult, type EngineUsage, type EngineHopReport, type ByoaSource } from './engine.js'
 import { usageFromClaude, type TokenUsage } from '../cost.js'
 import { parseTriage, finalizeTriage, isRateLimited } from '../triage-core.js'
 import { GLANCE_YIELD_RULES } from '../glance-protocol.js'
@@ -445,7 +445,22 @@ function authFailureHint(engine: EngineId, detail: string): string {
   if (engine === 'claude') {
     return 'Open Claude Code on that computer and sign in, refresh quota, or add credits, then wake the agent again.'
   }
-  return 'Open Codex on that computer and refresh its login or quota, then wake the agent again.'
+  if (engine === 'codex') {
+    return 'Open Codex on that computer and refresh its login or quota, then wake the agent again.'
+  }
+  if (engine === 'opencode') {
+    return 'Run `opencode auth login` on that computer, then wake the agent again.'
+  }
+  if (engine === 'pi') {
+    return 'Sign in to Pi on that computer (the `pi` CLI), then wake the agent again.'
+  }
+  if (engine === 'omp') {
+    return 'Sign in to omp on that computer, then wake the agent again.'
+  }
+  if (engine === 'dsh') {
+    return 'Set DEEPSEEK_API_KEY (or complete dsh auth) on that computer, then wake the agent again.'
+  }
+  return `Check ${engine} auth/quota on that computer, then wake the agent again.`
 }
 
 function missingEngineMessage(): string {
@@ -453,8 +468,12 @@ function missingEngineMessage(): string {
     'no supported local agent engine found on PATH',
     '',
     'Install and sign in to at least one of:',
-    '  - Claude Code: install the `claude` CLI, then run `claude` once to sign in',
-    '  - Codex: install the `codex` CLI, then run `codex` once to sign in',
+    '  - Claude Code: `claude`',
+    '  - Codex: `codex`',
+    '  - OpenCode: `opencode`',
+    '  - Pi: `pi`',
+    '  - omp (oh-my-pi): `omp`',
+    '  - dsh (DeepSeek Harness): `dsh`',
     '',
     'After that, rerun:',
     '  npx cumora@latest agent computer --pair <code>',
@@ -466,7 +485,7 @@ function helpText(): string {
     'cumora agent computer — run your Cumora agents on THIS machine (BYOA)',
     '',
     'The daemon talks to a Cumora server over HTTP and drives a local agent',
-    'engine (Claude Code or Codex). Pair once, then it runs in the background.',
+    'engine (Claude Code, Codex, OpenCode, Pi, omp, or dsh). Pair once, then it runs in the background.',
     '',
     'Usage:',
     '  npx cumora@latest agent computer --pair <code> [--server <url>] [--engine <id>]',
@@ -635,7 +654,7 @@ async function doPair(code: string, serverUrl: string, preferredEngine?: string)
  *    - flush() can be awaited at "natural pauses" (turn end) to push the tail
  *      promptly without waiting for the timer. */
 interface PendingHop {
-  source: 'byoa-claude' | 'byoa-codex'
+  source: ByoaSource
   purpose: 'agent-turn' | 'inbox-triage' | 'compaction' | 'completion-verify' | 'steer-summary' | 'agenda' | 'synthetic-wake-gate'
   runId: string | null
   conversationId: string | null
@@ -685,7 +704,7 @@ class HopReporter {
     // Codex + Claude batches might intermix (the same reporter is used across
     // session lifetimes), so split by source — the server endpoint takes one
     // source per call (the row's `source` column is set from it).
-    const byHourceSource = new Map<'byoa-claude' | 'byoa-codex', PendingHop[]>()
+    const byHourceSource = new Map<ByoaSource, PendingHop[]>()
     for (const h of batch) {
       const arr = byHourceSource.get(h.source) ?? []
       arr.push(h); byHourceSource.set(h.source, arr)
@@ -810,7 +829,7 @@ class AgentRunner {
       if (typeof report.toolUses === 'number') extras.toolUses = report.toolUses
       if (typeof report.textChars === 'number') extras.textChars = report.textChars
       this.reporter.push({
-        source: this.adapter.id === 'claude' ? 'byoa-claude' : 'byoa-codex',
+        source: byoaSource(this.adapter.id),
         purpose,
         runId: this.currentRunId,
         conversationId: this.lastWakeConvo,
@@ -1186,7 +1205,11 @@ class AgentRunner {
   /** Triage model id for pricing (the local cerebellum: claude→haiku,
    *  codex→gpt-5.4-mini), honoring a CUMORA_TRIAGE_MODEL override. */
   private triageModel(): string {
-    return process.env.CUMORA_TRIAGE_MODEL || (this.adapter.id === 'claude' ? 'haiku' : 'gpt-5.4-mini')
+    return process.env.CUMORA_TRIAGE_MODEL || (
+      this.adapter.id === 'claude' ? 'haiku'
+        : this.adapter.id === 'codex' ? 'gpt-5.4-mini'
+        : this.adapter.id
+    )
   }
 
   /** Post one local-triage record to the cost ledger. Best-effort. `usage` is the

@@ -1092,7 +1092,7 @@ api.post('/computers/pair', safe(async (req, res) => {
   // and any adopted agent are created with. Fall back to Claude if unreported.
   try {
     if ((await companyTier(paired.companyId)) === 'free') {
-      const engine = (engines[0] === 'claude' || engines[0] === 'codex') ? engines[0] : 'claude'
+      const engine = (engines[0] === 'claude' || engines[0] === 'codex' || engines[0] === 'opencode' || engines[0] === 'pi' || engines[0] === 'omp' || engines[0] === 'dsh') ? engines[0] : 'claude'
       // Adopt only agents that are stranded on the managed Cumora Cloud (or
       // unassigned) onto the just-paired machine — earlier builds' boot backfill
       // wrongly seeded free starters on cloud, where free can't run them. Agents
