@@ -3,7 +3,7 @@ import compression from 'compression'
 import http from 'node:http'
 import { mkdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { env } from './env.js'
 import { ensureSchemaWithBootRetry } from './db/migrate.js'
 import { seedIfEmpty } from './seed.js'
@@ -188,7 +188,16 @@ async function main() {
       // instantly even when the static-asset CDN caches aggressively.
       maxAge: '1h',
       setHeaders: (res, filePath) => {
-        if (filePath.endsWith('index.html')) {
+        const fileName = basename(filePath)
+        if (fileName === 'index.html') {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
+        }
+        if (fileName.endsWith('.webmanifest')) {
+          res.setHeader('Content-Type', 'application/manifest+json')
+        }
+        // SW + Workbox runtime must revalidate so deploys replace the worker.
+        // Do not give these the hashed-asset 1h cache.
+        if (fileName === 'sw.js' || fileName === 'registerSW.js' || /^workbox-.*\.js$/.test(fileName)) {
           res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
         }
       },

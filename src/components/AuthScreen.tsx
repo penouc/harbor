@@ -170,7 +170,7 @@ export function AuthScreen() {
       <div className="w-[320px] flex flex-col items-center gap-8">
         <CloudLogo size={64} />
         <div className="text-center">
-          <div className="font-display text-[22px] text-ink-900">Welcome to cumora</div>
+          <div className="font-display text-[22px] text-ink-900">Welcome to Harbor</div>
           <div className="font-display italic text-[13px] text-ink-400 mt-1">
             Sign in to continue
           </div>
