@@ -68,13 +68,15 @@ points at (OpenAI when unset). The secret name stays `OPENAI_API_KEY`.
 `AGENT_RUNTIME_SECRET` must **not** be the public-source dev default.
 `server/src/env.ts` refuses to boot in production if it is.
 
-**Public origin** (OAuth redirect_uri, invite links). After you know the
-`*.workers.dev` hostname, or after attaching the custom domain:
+**Public origin** (OAuth redirect_uri, invite links, pairing). Production
+already uses deploy-time `CUMORA_PUBLIC_ORIGIN` (not committed). The
+intended production origin is the custom domain; `workers.dev` remains a
+fallback:
 
 ```bash
 npx wrangler secret put CUMORA_PUBLIC_ORIGIN
-# example: https://harbor.<your-subdomain>.workers.dev
-# later:    https://raft.is-a-nice.app
+# production: https://raft.is-a-nice.app
+# fallback:   https://harbor.penouc.workers.dev
 ```
 
 When `CUMORA_PUBLIC_ORIGIN` is set, the Worker also fills
@@ -129,37 +131,31 @@ The first deploy provisions the container application; the `*.workers.dev`
 URL can answer before the image is ready. Wait a few minutes, then check
 **Workers & Pages → Containers** in the dashboard.
 
-This repo does **not** auto-deploy to Cloudflare. Do not put tokens in
-the PR or in CI for this path unless you add that later yourself.
+Workers Builds can run `wrangler deploy` from this repo. Keep the custom
+domain in `wrangler.jsonc` (see below) so that deploy does not drop the
+bind. Do not put tokens in the PR or in git.
 
 ## Custom domain: `raft.is-a-nice.app`
 
-Do not invent a Cloudflare **zone ID**. The hostname must already belong
-to a zone on **this** Cloudflare account (or you must add that zone
-first). Then attach the Worker as a Custom Domain:
-
-**Dashboard**
-
-1. [Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages) → worker **harbor**.
-2. **Settings** → **Domains & Routes** → **Add** → **Custom Domain**.
-3. Enter `raft.is-a-nice.app` → **Add Custom Domain**.
-
-Cloudflare creates DNS + the certificate. You cannot attach a Custom
-Domain on a hostname that already has a CNAME, or on a zone you do not
-own. See [Custom Domains](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/).
-
-**Wrangler** (once the zone is on the account). Uncomment in
-`wrangler.jsonc`:
+`raft.is-a-nice.app` is **already attached** to Worker `harbor` on zone
+`is-a-nice.app`. Do not invent a Cloudflare **zone ID**. The bind is
+declared in `wrangler.jsonc` so the next `wrangler deploy` does not drop
+it:
 
 ```jsonc
+"workers_dev": true,
 "routes": [
   { "pattern": "raft.is-a-nice.app", "custom_domain": true }
 ]
 ```
 
-Then `npx wrangler deploy`. After the hostname works, put
-`CUMORA_PUBLIC_ORIGIN=https://raft.is-a-nice.app` and deploy again so
-the container sees the new origin.
+`workers_dev: true` keeps `https://harbor.penouc.workers.dev` working as
+a fallback. See [Custom Domains](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/).
+
+Intended production `CUMORA_PUBLIC_ORIGIN` is
+`https://raft.is-a-nice.app`. That value is deploy-time (Worker secret /
+Workers Builds env), not a committed `vars` entry. After it is set,
+OAuth / invite / pairing use the new origin.
 
 ## Instance type
 
