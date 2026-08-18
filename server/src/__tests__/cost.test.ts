@@ -47,6 +47,13 @@ test('bare tier ids resolve to their tier (not the fallback) — "haiku" ≠ son
   assert.equal(priceFor('claude-sonnet-4-6').inPer1M, 3)
 })
 
+test('deepseek-v4 seed prices are estimates (not the mid-tier fallback)', () => {
+  assert.equal(priceFor('deepseek-v4-pro').inPer1M, 0.435)
+  assert.equal(priceFor('deepseek-v4-flash').inPer1M, 0.14)
+  assert.equal(priceFor('deepseek-v4-pro').verified, false)
+  assert.notEqual(priceFor('deepseek-v4-flash').inPer1M, priceFor('some-unknown-model').inPer1M)
+})
+
 test('addUsage sums across hops; inputEquivalentTokens is price-free scale', () => {
   const a: TokenUsage = { inputTokens: 10, cachedInputTokens: 5, cacheCreationTokens: 0, outputTokens: 2 }
   assert.deepEqual(addUsage(a, a), { inputTokens: 20, cachedInputTokens: 10, cacheCreationTokens: 0, outputTokens: 4 })

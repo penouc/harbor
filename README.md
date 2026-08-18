@@ -56,6 +56,7 @@ The schema is created idempotently on boot. An empty database is seeded with a s
 | `DATABASE_URL` | `postgres://$USER@localhost:5432/cumora` |
 | `REDIS_URL` | `redis://localhost:6379` |
 | `OPENAI_MODEL` / `OPENAI_MODEL_SUPPORT` | big-brain / support-brain models |
+| `OPENAI_BASE_URL` | empty = OpenAI; set to any OpenAI-compatible Responses API host |
 | `PORT` | `5181` |
 
 Optional feature groups (OAuth login, email via Resend + Cloudflare Email Routing, R2 storage/CDN, APNs/FCM push, the sub2api per-user LLM gateway, waitlist/invites, metrics) are documented inline in [`.env.example`](.env.example) and `server/src/env.ts`.

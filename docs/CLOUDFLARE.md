@@ -62,6 +62,9 @@ npx wrangler secret put OPENAI_API_KEY
 npx wrangler secret put AGENT_RUNTIME_SECRET   # openssl rand -hex 32
 ```
 
+`OPENAI_API_KEY` is the provider key for whatever host `OPENAI_BASE_URL`
+points at (OpenAI when unset). The secret name stays `OPENAI_API_KEY`.
+
 `AGENT_RUNTIME_SECRET` must **not** be the public-source dev default.
 `server/src/env.ts` refuses to boot in production if it is.
 
@@ -88,11 +91,28 @@ Soft-disable when unset:
 | Email | `RESEND_API_KEY`, `EMAIL_DOMAIN`, `EMAIL_INBOUND_HMAC_SECRET` |
 | Alerts | `ALERT_WEBHOOK_URL`, `DISCORD_ALERT_WEBHOOK_URL` |
 | Admin | `CUMORA_ADMIN_EMAILS` (comma-separated) |
-| Models | `OPENAI_MODEL`, `OPENAI_MODEL_SUPPORT`, `OPENAI_COMPACTION_MODEL` |
+| Models | `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OPENAI_MODEL_SUPPORT`, `OPENAI_COMPACTION_MODEL` |
 | Other | `SKILLHUB_URL`, `SUB2API_*`, `METRICS_BEARER_TOKEN`, `CUMORA_CORS_ORIGINS` |
 
 Same-origin SPA + API does **not** need CORS. Set `CUMORA_CORS_ORIGINS`
 only if a separately hosted client talks to this origin.
+
+`OPENAI_BASE_URL` is empty by default (SDK talks to OpenAI). To run the
+agent loop against DeepSeek V4 (native `responses.create` — do not
+rewrite to Chat Completions), set these four and keep `OPENAI_API_KEY`
+as the DeepSeek key:
+
+```
+OPENAI_BASE_URL=https://api.deepseek.com
+OPENAI_MODEL=deepseek-v4-pro
+OPENAI_MODEL_SUPPORT=deepseek-v4-flash
+OPENAI_COMPACTION_MODEL=deepseek-v4-flash
+```
+
+Do **not** put those values in committed `wrangler.jsonc` `vars`. Image
+generation (`gpt-image-2`) and embeddings (`text-embedding-3-small`)
+will fail on DeepSeek; embeddings already return `null` and fall back
+to recency-only retrieval.
 
 Full comments: [`.env.example`](../.env.example) and `server/src/env.ts`.
 

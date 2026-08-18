@@ -881,7 +881,9 @@ function modelToolOutputPayload(value: unknown): string {
  *
  *  Numbers come from each model's published max input tokens. Slight
  *  underestimates (round-down) so we leave headroom for the response
- *  tokens that follow the prompt. */
+ *  tokens that follow the prompt. DeepSeek V4 (pro/flash) is 1M — when
+ *  an operator points OPENAI_MODEL at those ids, compaction must not
+ *  fire at the 200K fallback. */
 function contextWindowFor(model: string | null): number {
   const m = (model ?? '').toLowerCase()
   if (m.includes('gpt-5.4-mini')) return 128_000
@@ -889,6 +891,7 @@ function contextWindowFor(model: string | null): number {
   if (m.includes('gpt-5')) return 200_000             // gpt-5.5, 5.4, 5.3, 5.2 — all ~200K input
   if (m.includes('gpt-4o')) return 128_000
   if (m.includes('gpt-4-turbo')) return 128_000
+  if (m.includes('deepseek')) return 1_000_000        // V4 Pro/Flash published 1M context
   return 200_000
 }
 
